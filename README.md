@@ -1,15 +1,19 @@
 # SyncAuth - Syncthing Credential Synchronization Manager
 
-SyncAuth is a containerized web application that allows you to synchronize Syncthing GUI credentials across multiple instances. It provides a clean web interface to manage your master and client Syncthing instances and automate the credential synchronization process.
+SyncAuth is a containerized web application that allows you to synchronize Syncthing GUI credentials across multiple instances. It provides a modern, responsive web interface to manage your master and client Syncthing instances and automate the credential synchronization process.
 
 ## Features
 
 - **Master-Client Configuration**: Configure a master Syncthing instance and manage multiple clients
 - **Credential Synchronization**: Automatically sync GUI username and password across instances
+- **Automatic Scheduled Sync**: Schedule syncs on hourly, daily, or weekly basis, or create a custom schedule
+- **Password Management**: Change Syncthing GUI passwords directly from the interface
 - **Device Discovery**: Discover Syncthing devices from your master instance
 - **Connection Testing**: Verify accessibility of all instances before synchronizing
+- **Reactive UI**: Modern Alpine.js-powered interface with real-time updates
 - **Database Management**: Options to encrypt, decrypt, reset, or start over with your configuration database
 - **Secure Storage**: Optionally encrypt your database with a secret key
+- **Mobile-Friendly Design**: Responsive interface works well on desktop and mobile devices
 
 ## Requirements
 
@@ -22,38 +26,68 @@ SyncAuth is a containerized web application that allows you to synchronize Synct
 ### Build and Run with Docker
 
 1. Clone this repository:
-   ```
+   ```bash
    git clone https://github.com/yourusername/SyncAuth.git
    cd SyncAuth
    ```
 
-2. Build the Docker image:
+2. Set up your environment configuration:
+
+   ```bash
+   # Copy the example environment file
+   cp .env.example .env
+   ```
+
+   > **Important**: Once you've started using SyncAuth with a specific SECRET_KEY, 
+   > changing it will make your existing database inaccessible.
+
+   Generate a secure key and update your `.env` file:
+
+   **Linux/Mac**:
+   ```bash
+   # Generate a secure random key
+   NEW_KEY=$(openssl rand -hex 32)
+   echo "Generated key: $NEW_KEY"
+   
+   # Manually edit .env and replace the SECRET_KEY line with your new key
+   # Or use these commands:
+   
+   # For Linux:
+   # sed -i "s/^SECRET_KEY=.*/SECRET_KEY=$NEW_KEY/" .env
+   
+   # For macOS:
+   # sed -i '' "s/^SECRET_KEY=.*/SECRET_KEY=$NEW_KEY/" .env
+   ```
+
+   **Windows (PowerShell)**:
+   ```powershell
+   # Generate a secure random key
+   $NEW_KEY = (openssl rand -hex 32)
+   echo "Generated key: $NEW_KEY"
+   
+   # Manually edit .env and replace the SECRET_KEY line with your new key
+   # Or use this command:
+   (Get-Content .env) -replace "^SECRET_KEY=.*", "SECRET_KEY=$NEW_KEY" | Set-Content .env
+   ```
+
+   Review your `.env` file and adjust settings as needed.
+
+3. Build the Docker image:
    ```
    docker build -t syncauth .
    ```
 
-3. Run the container:
+4. Run the container:
    ```
    docker run -d \
      --name syncauth \
      -p 5001:5001 \
-     -v /path/to/data:/data \
+     -v $(pwd)/docker_data:/data \
+     --env-file .env \
      syncauth
    ```
 
-   Optional: Set environment variables for configuration:
-   ```
-   docker run -d \
-     --name syncauth \
-     -p 5001:5001 \
-     -v /path/to/data:/data \
-     -e SECRET_KEY="your_encryption_key" \
-     -e PORT=5001 \
-     -e DEBUG=False \
-     syncauth
-   ```
-
-4. Access the web interface at `http://localhost:5001`
+5. Access the web interface at `http://localhost:5001`
 
 ## Environment Variables
 
@@ -63,16 +97,57 @@ SyncAuth is a containerized web application that allows you to synchronize Synct
 | `PORT` | Port to listen on | `5001` |
 | `DEBUG` | Enable debug mode | `False` |
 | `DATA_DIR` | Directory for data storage | `/data` |
-| `SECRET_KEY` | Encryption key for the database | Random value |
+| `SECRET_KEY` | Key for session security and database encryption | Random value |
+| `SYNCTHING_VERIFY_SSL` | Verify SSL certificates | `True` |
 
-## Database Management
+> **Important Security Note**: If you don't provide a `SECRET_KEY`, the application will generate a random one, but it will change on each restart. This will invalidate all existing sessions and could affect database access. For production use, ALWAYS set a consistent `SECRET_KEY` in your environment variables.
 
-SyncAuth includes several database management options:
+## Database Security
 
-- **Encryption**: Encrypt your database using a secret key for enhanced security
-- **Decryption**: Decrypt an existing encrypted database
-- **Reset**: Reset the database while creating a backup of the existing data
-- **Delete & Start Over**: Completely delete and recreate the database without backup
+SyncAuth provides security through the following mechanisms:
+
+- **Session Security**: The `SECRET_KEY` environment variable is used to sign session cookies
+- **Data Storage**: Database is stored in SQLite within the specified `DATA_DIR`
+- **Database Security**: The database uses SQLCipher for encryption when `SECRET_KEY` is provided
+- **Authentication**: All authentication is performed via Syncthing instances
+
+> **Note about `SECRET_KEY`**: If you don't provide a `SECRET_KEY`, the application will generate a random one, but it will change on each restart. For production use, always set a static `SECRET_KEY` in your environment variables to ensure consistent encryption.
+
+> **CRITICAL WARNING**: The database is encrypted using the `SECRET_KEY` value. If you change, remove, or add a `SECRET_KEY` after initial setup, **your existing database will no longer work** and you'll lose access to all stored data. Always back up your database before changing the `SECRET_KEY`.
+
+## User Interface
+
+### Credential Synchronization
+
+The credential synchronization page allows you to:
+
+- **Manually sync credentials** to all enabled clients with a single click
+- **Set up automatic synchronization** with the following schedule options:
+  - Manual only (default)
+  - Every hour
+  - Once daily
+  - Once weekly
+  - Custom schedule with specific days and times
+- **Configure quiet hours** when automatic syncs will not run
+- **Enable browser notifications** for sync results
+
+### Password Management
+
+SyncAuth allows you to change Syncthing GUI passwords directly from the interface:
+
+- **Change master password**: Update the password on the master Syncthing instance
+- **Sync password changes**: Optionally propagate password changes to all enabled clients
+- **Verify current password**: Security check to ensure the current password is valid
+
+### Device Management
+
+The unified device view provides:
+
+- **Combined list** of both connected and managed devices
+- **Enable/Disable sync** buttons for each device
+- **Edit button** for modifying device configuration
+- **Status indicators** showing connection status
+- **IP/Domain display** showing device addresses in a clean format
 
 ## API Endpoints
 
@@ -109,63 +184,216 @@ SyncAuth includes several database management options:
 | `/api/test-connection` | POST | Test connection to a client or master |
 | `/api/test-stored-connection` | POST | Test connection using stored API key |
 | `/api/check-config-changes` | GET | Check for config changes in Syncthing |
+| `/api/change-password` | POST | Change Syncthing GUI password |
 
 ## Workflow
 
 1. **Initial Setup**: Configure your master Syncthing instance
 2. **Add Clients**: Either discover devices or add them manually
 3. **Enable Sync**: For each device, enable synchronization
-4. **Set Credentials**: Enter the desired GUI username and password
-5. **Synchronize**: Apply the credentials to all enabled clients
+4. **Schedule Syncs**: Set up automatic synchronization schedule (optional)
+5. **Set Credentials**: Change or update GUI credentials as needed
+6. **Manage Passwords**: Update passwords directly from the interface
 
 ## Security Considerations
 
 - API keys are stored in the SQLite database
-- Enable database encryption for sensitive environments
-- All communication is done via the Syncthing API
-- For production use, consider setting up HTTPS with a reverse proxy
-- Only deploy in trusted networks where all Syncthing instances are reachable
+- Database can be encrypted using SQLCipher for additional security
+- Passwords are handled using bcrypt hashing
+- All authentication is performed against the Syncthing instances
+- Use HTTPS and proper network security for production deployments
 
 ## Troubleshooting
 
-### Database Issues
+If you encounter synchronization issues:
 
-If your database becomes corrupted or you forget your encryption key:
-1. Use the "Delete & Start Over" option from the interface
-2. Or delete the database file manually from your data volume
-3. Restart the container
-
-### Connection Issues
-
-If you're having trouble connecting to Syncthing instances:
 1. Verify the API keys are correct
 2. Ensure the Syncthing GUI is accessible at the provided address
 3. Check for firewall rules that might be blocking communication
 4. Look for TLS/SSL certificate issues if using HTTPS
+5. Check the logs for detailed error messages
 
 ## Development
 
-### Prerequisites
+### Docker Compose (Recommended for Development)
 
-- Python 3.9+
-- Flask and other dependencies listed in requirements.txt
+Create a `docker-compose.yml` file:
 
-### Local Setup
+```yaml
+version: '3'
+services:
+  syncauth:
+    build: .
+    ports:
+      - "5001:5001"
+    volumes:
+      - ./docker_data:/data
+    env_file:
+      - .env
+    restart: unless-stopped
+```
 
-1. Install dependencies:
+Create a secure `.env` file for your Docker Compose setup:
+```bash
+# Copy the example environment file
+cp .env.example .env
+
+# Generate a secure random key for production
+NEW_KEY=$(openssl rand -hex 32)
+echo "Generated key: $NEW_KEY"
+
+# Manually edit .env to update the SECRET_KEY and other settings
+# Or use one of these commands depending on your OS:
+#
+# For Linux:  sed -i "s/^SECRET_KEY=.*/SECRET_KEY=$NEW_KEY/" .env
+# For macOS:  sed -i '' "s/^SECRET_KEY=.*/SECRET_KEY=$NEW_KEY/" .env
+```
+
+Then run:
+```bash
+docker-compose up -d
+```
+
+### Local Setup with pyenv
+
+You can also use pyenv to create a dedicated Python environment for running SyncAuth without Docker.
+
+#### macOS Setup
+
+1. Install pyenv (if not already installed):
+   ```bash
+   brew update
+   brew install pyenv
    ```
+
+2. Add pyenv to your shell:
+   ```bash
+   echo 'export PYENV_ROOT="$HOME/.pyenv"' >> ~/.zshrc
+   echo 'command -v pyenv >/dev/null || export PATH="$PYENV_ROOT/bin:$PATH"' >> ~/.zshrc
+   echo 'eval "$(pyenv init -)"' >> ~/.zshrc
+   ```
+
+3. Restart your terminal or run `source ~/.zshrc`
+
+4. Install Python and create a virtual environment:
+   ```bash
+   pyenv install 3.9.22
+   pyenv local 3.9.22
+   python -m venv venv
+   source venv/bin/activate
+   ```
+
+5. Install the dependencies:
+   ```bash
    pip install -r requirements.txt
    ```
 
-2. Run the application:
+   Note: The `pysqlcipher3` package might require additional system dependencies on macOS:
+   ```bash
+   brew install openssl sqlcipher
+   export LDFLAGS="-L$(brew --prefix openssl)/lib -L$(brew --prefix sqlcipher)/lib"
+   export CFLAGS="-I$(brew --prefix openssl)/include -I$(brew --prefix sqlcipher)/include"
+   pip install pysqlcipher3==1.2.0
    ```
+
+6. Set up environment variables:
+   ```bash
+   # Copy the example environment file
+   cp .env.example .env
+   
+   # Generate a secure random key
+   NEW_KEY=$(openssl rand -hex 32)
+   echo "Generated key: $NEW_KEY"
+   
+   # Manually edit .env to update the SECRET_KEY and other settings
+   # For development, change these values:
+   # DEBUG=false to DEBUG=true
+   # HOST=0.0.0.0 to HOST=127.0.0.1
+   #
+   # Or use these commands:
+   # sed -i '' "s/^SECRET_KEY=.*/SECRET_KEY=$NEW_KEY/" .env
+   # sed -i '' "s/^DEBUG=.*/DEBUG=true/" .env
+   # sed -i '' "s/^HOST=.*/HOST=127.0.0.1/" .env
+   ```
+
+7. Run the application:
+   ```bash
    python app.py
    ```
+
+8. Access the web interface at `http://127.0.0.1:5001`
+
+#### Linux Setup
+
+1. Install pyenv dependencies and pyenv:
+   ```bash
+   sudo apt-get update
+   sudo apt-get install -y make build-essential libssl-dev zlib1g-dev \
+   libbz2-dev libreadline-dev libsqlite3-dev wget curl llvm \
+   libncursesw5-dev xz-utils tk-dev libxml2-dev libxmlsec1-dev libffi-dev liblzma-dev
+   
+   curl https://pyenv.run | bash
+   ```
+
+2. Add pyenv to your shell:
+   ```bash
+   echo 'export PYENV_ROOT="$HOME/.pyenv"' >> ~/.bashrc
+   echo 'command -v pyenv >/dev/null || export PATH="$PYENV_ROOT/bin:$PATH"' >> ~/.bashrc
+   echo 'eval "$(pyenv init -)"' >> ~/.bashrc
+   ```
+
+3. Restart your terminal or run `source ~/.bashrc`
+
+4. Install Python and create a virtual environment:
+   ```bash
+   pyenv install 3.9.22
+   pyenv local 3.9.22
+   python -m venv venv
+   source venv/bin/activate
+   ```
+
+5. Install the dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+   Note: The `pysqlcipher3` package might require additional system dependencies on Linux:
+   ```bash
+   sudo apt-get install -y libsqlcipher-dev
+   pip install pysqlcipher3==1.2.0
+   ```
+
+6. Set up environment variables:
+   ```bash
+   # Copy the example environment file
+   cp .env.example .env
+   
+   # Generate a secure random key
+   NEW_KEY=$(openssl rand -hex 32)
+   echo "Generated key: $NEW_KEY"
+   
+   # Manually edit .env to update the SECRET_KEY and other settings
+   # For development, change these values:
+   # DEBUG=false to DEBUG=true
+   # HOST=0.0.0.0 to HOST=127.0.0.1
+   #
+   # Or use these commands:
+   # sed -i "s/^SECRET_KEY=.*/SECRET_KEY=$NEW_KEY/" .env
+   # sed -i "s/^DEBUG=.*/DEBUG=true/" .env
+   # sed -i "s/^HOST=.*/HOST=127.0.0.1/" .env
+   ```
+
+7. Run the application:
+   ```bash
+   python app.py
+   ```
+
+8. Access the web interface at `http://127.0.0.1:5001`
 
 ## Technical Details
 
 - **Backend**: Python Flask application
-- **Frontend**: HTML, CSS, and vanilla JavaScript
+- **Frontend**: Alpine.js and Axios for a reactive UI
 - **Storage**: SQLite database with optional SQLCipher encryption
 - **Container**: Docker-based deployment
 - **Persistence**: Volume mount for the database file

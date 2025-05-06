@@ -154,7 +154,7 @@ def init_db():
             # Database is unencrypted
             if key_provided:
                 # Key provided but DB is not encrypted - ask if they want to encrypt
-                update_db_status('unencrypted', 'Database is not encrypted but a key was provided. You can encrypt it or remove the SECRET_KEY.', 
+                update_db_status('unencrypted', 'Database is not encrypted but a SECRET_KEY was provided in your environment. You have two options:\n1. Encrypt the database (recommended for security)\n2. Remove the SECRET_KEY from your .env file and restart the container', 
                                 has_data=has_data, key_provided=key_provided)
             else:
                 # No key and DB is not encrypted (normal state)
@@ -223,118 +223,209 @@ def create_tables(conn):
 
 def get_db_connection():
     """Get a database connection based on whether encryption is enabled."""
-    try:
-        # Check if database exists
-        db_exists = os.path.exists(get_db_path())
-        
-        # Try to connect without encryption first
+    # Get the path to the database file
+    db_path = get_db_path()
+    
+    # Check if the database file exists
+    db_exists = os.path.exists(db_path)
+    
+    # Check if we have a key provided
+    key = os.environ.get('SECRET_KEY', None)
+    update_db_status('checking', 'Checking database state...', has_data=db_exists, key_provided=bool(key))
+    
+    if not db_exists:
+        # Database doesn't exist, we need to create it
         try:
-            # This will fail if the database is encrypted
-            conn = sqlite3.connect(get_db_path())
-            conn.row_factory = sqlite3.Row
-            return conn
-        except sqlite3.OperationalError as e:
-            # Database might be encrypted or corrupt
-            if 'file is not a database' in str(e) or 'file is encrypted' in str(e):
-                # Try with encryption if we have a key
-                key = os.environ.get('SECRET_KEY', '')
-                if key:
-                    try:
-                        conn = sqlcipher.connect(get_db_path())
-                        conn.execute(f'PRAGMA key="{key}"')
-                        # Verify we can actually read the database
-                        conn.execute('SELECT 1')
-                        conn.row_factory = sqlite3.Row
-                        return conn
-                    except Exception as e2:
-                        update_db_status('error', f'Failed to connect with encryption key: {str(e2)}')
-                        # If the database exists but we can't access it with or without a key,
-                        # it might be corrupt or using a different key
-                        if db_exists:
-                            # Create a backup and reset if this is a new run
-                            backup_path = get_db_backup_path()
-                            try:
-                                shutil.copy2(get_db_path(), backup_path)
-                                os.remove(get_db_path())
-                                update_db_status('warning', f'Created backup at {backup_path} and reset database.')
-                                # Now try to create a fresh database
-                                if key:
-                                    conn = sqlcipher.connect(get_db_path())
-                                    conn.execute(f'PRAGMA key="{key}"')
-                                else:
-                                    conn = sqlite3.connect(get_db_path())
-                                conn.row_factory = sqlite3.Row
-                                return conn
-                            except Exception as e3:
-                                update_db_status('error', f'Failed to reset database: {str(e3)}')
-                                return None
-                else:
-                    # No encryption key, but database is encrypted or corrupt
-                    update_db_status('needs_key', 'Database appears to be encrypted but no key was provided.')
-                    return None
+            if key and ENCRYPTION_AVAILABLE:
+                # We have a key and encryption is available, create an encrypted database
+                conn = sqlcipher.connect(db_path)
+                conn.execute(f'PRAGMA key="{key}"')
+                create_tables(conn)
+                update_db_status('ok', 'Database created and encrypted successfully.', has_data=True, key_provided=True)
+                return conn
             else:
-                # Some other operational error
-                update_db_status('error', f'Database connection error: {str(e)}')
-                return None
+                # No key or encryption is not available, create an unencrypted database
+                conn = sqlite3.connect(db_path)
+                create_tables(conn)
+                if key and not ENCRYPTION_AVAILABLE:
+                    update_db_status('unencrypted', 'Database created but not encrypted because pysqlcipher3 is not available. A SECRET_KEY was provided but cannot be used.', has_data=True, key_provided=True)
+                else:
+                    update_db_status('unencrypted', 'Database initialized successfully.', has_data=True, key_provided=bool(key))
+                return conn
+        except Exception as e:
+            print(f"Error creating database: {e}")
+            update_db_status('error', f'Error creating database: {e}', has_data=False, key_provided=bool(key))
+            return None
+    
+    # Database exists, try to connect
+    if key and ENCRYPTION_AVAILABLE:
+        # Try to open as encrypted first
+        try:
+            conn = sqlcipher.connect(db_path)
+            conn.execute(f'PRAGMA key="{key}"')
+            # Test if we can actually access it with this key
+            conn.execute('SELECT count(*) FROM sqlite_master')
+            update_db_status('ok', 'Connected to encrypted database.', has_data=True, key_provided=True)
+            return conn
+        except Exception as e:
+            print(f"Failed to open as encrypted: {e}")
+            # It's either not encrypted, or encrypted with a different key
+            pass
+    
+    # Try to open as unencrypted
+    try:
+        conn = sqlite3.connect(db_path)
+        # Test if we can access it
+        conn.execute('SELECT count(*) FROM sqlite_master')
+        if key and ENCRYPTION_AVAILABLE:
+            # We have a key and encryption is available, but the database is not encrypted
+            update_db_status('unencrypted', 'Database is not encrypted but a SECRET_KEY was provided in your environment. You have two options:\n1. Encrypt the database (recommended for security)\n2. Remove the SECRET_KEY from your .env file and restart the container', has_data=True, key_provided=True)
+        else:
+            update_db_status('unencrypted', 'Database initialized successfully.', has_data=True, key_provided=bool(key))
+        return conn
     except Exception as e:
-        update_db_status('error', f'Unexpected database error: {str(e)}')
+        # It might be encrypted with a different key, or corrupt
+        print(f"Failed to open as unencrypted: {e}")
+        if key:
+            update_db_status('encrypted_or_corrupt', 'Database appears to be encrypted with a different key than the one provided, or it may be corrupted.', has_data=True, key_provided=True)
+        else:
+            update_db_status('needs_key', 'Database appears to be encrypted. Please provide the correct SECRET_KEY in your environment.', has_data=True, key_provided=False)
         return None
 
 def encrypt_database(key):
     """Encrypt an unencrypted database with the given key."""
-    if not os.path.exists(get_db_path()):
-        update_db_status('error', 'Cannot encrypt: Database file does not exist.')
+    print(f"Starting encryption process with key length: {len(key)}")
+    db_path = get_db_path()
+    backup_path = f"{db_path}.unencrypted.bak"
+    temp_sql = f"{db_path}.temp.sql"
+    
+    if not os.path.exists(db_path):
+        error_msg = 'Cannot encrypt: Database file does not exist.'
+        print(f"ERROR: {error_msg}")
+        update_db_status('error', error_msg)
         return False
         
     try:
-        # First, check if already encrypted
-        encrypted = False
+        # Check if SQLCipher is actually available
+        if not ENCRYPTION_AVAILABLE:
+            error_msg = 'Cannot encrypt: SQLCipher support not available'
+            print(f"ERROR: {error_msg}")
+            update_db_status('error', error_msg)
+            return False
+        
+        # First check if already encrypted
         try:
-            conn = sqlite3.connect(f'file:{get_db_path()}?mode=ro', uri=True)
+            print("Checking if database is already encrypted...")
+            conn = sqlite3.connect(f'file:{db_path}?mode=ro', uri=True)
             conn.close()
-        except sqlite3.OperationalError:
-            encrypted = True
-            
-        if encrypted:
-            update_db_status('error', 'Database is already encrypted.')
+            print("Database is not encrypted (standard SQLite connection succeeded)")
+        except sqlite3.OperationalError as e:
+            print(f"Database connection test error: {e}")
+            error_msg = 'Database is already encrypted or corrupted.'
+            print(f"ERROR: {error_msg}")
+            update_db_status('error', error_msg)
             return False
             
-        # Create a backup
-        backup_path = get_db_backup_path()
-        shutil.copy2(get_db_path(), backup_path)
+        # Create a backup of the unencrypted database
+        print(f"Creating backup at {backup_path}")
+        try:
+            shutil.copy2(db_path, backup_path)
+            print(f"Backup created successfully at {backup_path}")
+        except Exception as backup_err:
+            error_msg = f'Failed to create backup: {str(backup_err)}'
+            print(f"ERROR: {error_msg}")
+            update_db_status('error', error_msg)
+            return False
         
-        # Export the database to a temporary SQL file
-        temp_sql = f"{get_db_path()}.temp.sql"
-        conn = sqlite3.connect(get_db_path())
-        with open(temp_sql, 'w') as f:
-            for line in conn.iterdump():
-                f.write(f"{line}\n")
-        conn.close()
+        # Export the database schema and data to a SQL script
+        print(f"Exporting database to SQL script at {temp_sql}")
+        try:
+            conn = sqlite3.connect(db_path)
+            with open(temp_sql, 'w') as f:
+                for line in conn.iterdump():
+                    f.write(f"{line}\n")
+            conn.close()
+            print("Database exported successfully")
+        except Exception as export_err:
+            error_msg = f'Failed to export database: {str(export_err)}'
+            print(f"ERROR: {error_msg}")
+            update_db_status('error', error_msg)
+            return False
+        
+        # Remove the original database
+        try:
+            print(f"Removing original database at {db_path}")
+            os.remove(db_path)
+            print("Original database removed successfully")
+        except Exception as remove_err:
+            error_msg = f'Failed to remove original database: {str(remove_err)}'
+            print(f"ERROR: {error_msg}")
+            update_db_status('error', error_msg)
+            return False
         
         # Create a new encrypted database
-        os.remove(get_db_path())  # Remove the old database file
-        conn = sqlcipher.connect(get_db_path())
-        conn.execute(f'PRAGMA key="{key}"')
+        try:
+            print("Creating new encrypted database")
+            conn = sqlcipher.connect(db_path)
+            conn.execute(f'PRAGMA key="{key}"')
+            
+            # Test encryption by creating and dropping a test table
+            conn.execute('CREATE TABLE test_encryption (id INTEGER PRIMARY KEY)')
+            conn.execute('DROP TABLE test_encryption')
+            print("Encryption test successful")
+            
+            # Import the SQL script
+            print("Importing SQL script to encrypted database")
+            with open(temp_sql, 'r') as f:
+                sql_script = f.read()
+                conn.executescript(sql_script)
+                
+            conn.commit()
+            conn.close()
+            print("SQL import completed successfully")
+        except Exception as encrypt_err:
+            error_msg = f'Failed to create encrypted database: {str(encrypt_err)}'
+            print(f"ERROR: {error_msg}")
+            
+            # Try to restore from backup
+            try:
+                if os.path.exists(backup_path):
+                    shutil.copy2(backup_path, db_path)
+                    print("Restored original database from backup")
+            except Exception as restore_err:
+                print(f"Failed to restore backup: {str(restore_err)}")
+                
+            update_db_status('error', error_msg)
+            return False
         
-        # Import the SQL
-        with open(temp_sql, 'r') as f:
-            sql_script = f.read()
-            conn.executescript(sql_script)
+        # Clean up temporary files
+        try:
+            print("Cleaning up temporary files")
+            if os.path.exists(temp_sql):
+                os.remove(temp_sql)
+                print("Temporary SQL file removed")
+        except Exception as cleanup_err:
+            print(f"Warning: Failed to remove temporary file: {str(cleanup_err)}")
         
-        conn.commit()
-        conn.close()
-        
-        # Clean up
-        os.remove(temp_sql)
-        
-        # Update environment variable for future access
-        os.environ['SECRET_KEY'] = key
-        
+        print("Database encryption completed successfully!")
         update_db_status('ok', 'Database encrypted successfully.', has_data=True, key_provided=True)
         return True
         
     except Exception as e:
-        update_db_status('error', f'Failed to encrypt database: {str(e)}')
+        error_msg = f'Failed to encrypt database: {str(e)}'
+        print(f"ERROR: {error_msg}")
+        import traceback
+        print(f"Traceback: {traceback.format_exc()}")
+        
+        # Try to restore from backup if it exists
+        try:
+            if os.path.exists(backup_path) and not os.path.exists(db_path):
+                shutil.copy2(backup_path, db_path)
+                print("Restored database from backup after error")
+        except Exception as restore_err:
+            print(f"Failed to restore backup: {str(restore_err)}")
+            
+        update_db_status('error', error_msg)
         return False
 
 def decrypt_database(key, create_backup=True):
@@ -444,9 +535,15 @@ def get_master_config():
         return None
         
     try:
-        result = conn.execute('SELECT id, address, api_key FROM master_config WHERE id = 1').fetchone()
+        cursor = conn.cursor()
+        result = cursor.execute('SELECT id, address, api_key FROM master_config WHERE id = 1').fetchone()
         if result:
-            config = dict(result)
+            # Create a dictionary manually from column names and values
+            config = {
+                'id': result[0],
+                'address': result[1],
+                'api_key': result[2]
+            }
             # Decrypt the API key
             if config.get('api_key'):
                 config['api_key'] = decrypt_api_key(config['api_key'])

@@ -123,22 +123,57 @@ document.addEventListener('alpine:init', () => {
         devices: [],
         latestEventId: null,
         configPollingInterval: null,
-        editingClientId: null,
+        syncing: false,
+        changingPassword: false,
+        
+        // Status messages for different sections
         statusMessages: {
             master: '',
             masterError: false,
             sync: '',
             syncError: false,
             devices: '',
-            devicesError: false
+            devicesError: false,
+            password: '',
+            passwordError: false
         },
         
-        // Form models
+        // Master configuration
         masterConfig: {
             address: '',
             apiKey: ''
         },
         
+        // Sync configuration
+        syncConfig: {
+            frequency: 'manual', // manual, hourly, daily, weekly, custom
+            lastSync: '',
+            nextSync: '',
+            syncIntervalId: null,
+            
+            // Custom scheduling options
+            customType: 'interval', // interval or specific
+            intervalValue: 30,
+            intervalUnit: 'minutes',
+            syncTime: '12:00',
+            syncDays: ['1', '2', '3', '4', '5'], // Monday to Friday by default
+            
+            // Advanced options
+            showNotifications: false,
+            quietHoursEnabled: false,
+            quietHoursStart: '22:00',
+            quietHoursEnd: '08:00'
+        },
+        
+        // Modal states
+        modals: {
+            client: false,
+            address: false,
+            combined: false,
+            password: false
+        },
+        
+        // Client form data
         clientForm: {
             id: '',
             label: '',
@@ -148,11 +183,7 @@ document.addEventListener('alpine:init', () => {
             syncEnabled: true
         },
         
-        // Modal state
-        modals: {
-            client: false,
-            combined: false
-        },
+        editingClientId: null,
         
         // Combined modal state
         combinedModal: {
@@ -162,6 +193,23 @@ document.addEventListener('alpine:init', () => {
             deviceId: '',
             addressSuggestions: [],
             onConfirm: null
+        },
+        
+        // Password change form data
+        passwordForm: {
+            currentPassword: '',
+            newPassword: '',
+            confirmPassword: '',
+            syncOption: 'master' // 'master' or 'all'
+        },
+        
+        // Computed property to check if password form is valid
+        get isPasswordFormValid() {
+            return this.passwordForm.currentPassword && 
+                   this.passwordForm.newPassword && 
+                   this.passwordForm.confirmPassword && 
+                   this.passwordForm.newPassword === this.passwordForm.confirmPassword &&
+                   this.passwordForm.newPassword.length >= 8;
         },
         
         // Helper function to ensure address has the correct port (8384)
@@ -205,6 +253,11 @@ document.addEventListener('alpine:init', () => {
             this.loadMasterConfig();
             this.loadAllDevices();
             this.startConfigPolling();
+            this.loadSyncConfig();
+            this.checkAndScheduleSync();
+            
+            // Add a change password button to the header navigation
+            this.addPasswordChangeButton();
         },
         
         // API Functions
@@ -333,37 +386,54 @@ document.addEventListener('alpine:init', () => {
         
         async syncCredentials() {
             try {
-                this.showStatus('sync', 'Synchronizing credentials...');
+                this.clearStatus('sync');
+                this.showStatus('sync', 'Syncing credentials...', false);
+                this.syncing = true;
                 
-                const response = await axios.post('/api/sync-credentials', {}, {
-                    headers: {
-                        'Content-Type': 'application/json'
-                    }
-                });
+                const response = await axios.post('/api/sync-credentials')
+                    .then(response => {
+                        if (response.data.success) {
+                            // Update last sync time
+                            const now = new Date();
+                            this.syncConfig.lastSync = this.formatDateTime(now);
+                            
+                            // Calculate next sync time if not manual
+                            if (this.syncConfig.frequency !== 'manual') {
+                                this.calculateNextSyncTime(now);
+                            }
+                            
+                            // Save sync config
+                            this.saveSyncConfig();
+                            
+                            let message = 'Credentials synced successfully';
+                            if (response.data.syncResults && response.data.syncResults.length > 0) {
+                                message += ':<ul>';
+                                response.data.syncResults.forEach(result => {
+                                    const statusClass = result.success ? 'success' : 'error';
+                                    const icon = result.success ? '✓' : '✗';
+                                    message += `<li class="${statusClass}"><strong>${icon} ${result.client}</strong>: ${result.message}</li>`;
+                                });
+                                message += '</ul>';
+                            }
+                            this.showStatus('sync', message, false, true);
+                        } else {
+                            this.showStatus('sync', `Sync failed: ${response.data.error || 'Unknown error'}`, true);
+                        }
+                        this.syncing = false;
+                        return response;
+                    })
+                    .catch(error => {
+                        console.error('Sync error:', error);
+                        this.showStatus('sync', `Sync failed: ${error.response?.data?.error || error.message || 'Unknown error'}`, true);
+                        this.syncing = false;
+                        throw error; // Re-throw for handling in the auto-sync function
+                    });
                 
-                if (response.data.success) {
-                    let resultMessage = 'Credentials synchronized successfully!';
-                    
-                    // Add details about sync results if available
-                    if (response.data.results && response.data.results.length > 0) {
-                        resultMessage += '<ul>';
-                        response.data.results.forEach(r => {
-                            const status = r.success ? 'Success' : 'Failed - ' + sanitizeHTML(r.error || 'Unknown error');
-                            resultMessage += `<li>${r.label}: ${status}</li>`;
-                        });
-                        resultMessage += '</ul>';
-                    }
-                    
-                    this.showStatus('sync', resultMessage, false, true);
-                    
-                    // Refresh device list to show updated status
-                    this.loadAllDevices();
-                } else {
-                    throw new Error(response.data.error || 'Failed to synchronize credentials');
-                }
+                return response;
             } catch (error) {
                 console.error('Error syncing credentials:', error);
-                this.showStatus('sync', `Error: ${error.response ? error.response.data.error : error.message}`, true);
+                this.syncing = false;
+                throw error;
             }
         },
         
@@ -765,6 +835,285 @@ document.addEventListener('alpine:init', () => {
             this.showStatus('devices', sanitizeHTML(message), false, true);
         },
         
+        // Load sync configuration from localStorage
+        loadSyncConfig() {
+            try {
+                const savedConfig = localStorage.getItem('syncConfig');
+                if (savedConfig) {
+                    const config = JSON.parse(savedConfig);
+                    
+                    // Load basic config
+                    this.syncConfig.frequency = config.frequency || 'manual';
+                    this.syncConfig.lastSync = config.lastSync || '';
+                    
+                    // Load custom scheduling options if saved
+                    if (config.customType) this.syncConfig.customType = config.customType;
+                    if (config.intervalValue) this.syncConfig.intervalValue = config.intervalValue;
+                    if (config.intervalUnit) this.syncConfig.intervalUnit = config.intervalUnit;
+                    if (config.syncTime) this.syncConfig.syncTime = config.syncTime;
+                    if (config.syncDays) this.syncConfig.syncDays = config.syncDays;
+                    
+                    // Load advanced options if saved
+                    if (config.showNotifications !== undefined) {
+                        this.syncConfig.showNotifications = config.showNotifications;
+                    }
+                    if (config.quietHoursEnabled !== undefined) {
+                        this.syncConfig.quietHoursEnabled = config.quietHoursEnabled;
+                    }
+                    if (config.quietHoursStart) this.syncConfig.quietHoursStart = config.quietHoursStart;
+                    if (config.quietHoursEnd) this.syncConfig.quietHoursEnd = config.quietHoursEnd;
+                    
+                    // Calculate next sync time if applicable
+                    if (this.syncConfig.frequency !== 'manual') {
+                        if (config.lastSync) {
+                            this.calculateNextSyncTime(new Date(config.lastSync));
+                        } else {
+                            this.calculateNextSyncTime(new Date());
+                        }
+                    }
+                    
+                    // Request notification permission if enabled
+                    if (this.syncConfig.showNotifications) {
+                        this.requestNotificationPermission();
+                    }
+                }
+            } catch (error) {
+                console.error('Error loading sync configuration:', error);
+            }
+        },
+        
+        // Request permission for browser notifications
+        requestNotificationPermission() {
+            if ('Notification' in window && this.syncConfig.showNotifications) {
+                if (Notification.permission !== 'granted' && Notification.permission !== 'denied') {
+                    Notification.requestPermission();
+                }
+            }
+        },
+        
+        // Save sync configuration to localStorage
+        saveSyncConfig() {
+            try {
+                localStorage.setItem('syncConfig', JSON.stringify({
+                    frequency: this.syncConfig.frequency,
+                    lastSync: this.syncConfig.lastSync,
+                    
+                    // Custom scheduling options
+                    customType: this.syncConfig.customType,
+                    intervalValue: this.syncConfig.intervalValue,
+                    intervalUnit: this.syncConfig.intervalUnit,
+                    syncTime: this.syncConfig.syncTime,
+                    syncDays: this.syncConfig.syncDays,
+                    
+                    // Advanced options
+                    showNotifications: this.syncConfig.showNotifications,
+                    quietHoursEnabled: this.syncConfig.quietHoursEnabled,
+                    quietHoursStart: this.syncConfig.quietHoursStart,
+                    quietHoursEnd: this.syncConfig.quietHoursEnd
+                }));
+            } catch (error) {
+                console.error('Error saving sync configuration:', error);
+            }
+        },
+        
+        // Update sync frequency when user changes the dropdown
+        updateSyncFrequency() {
+            // Clear any existing interval
+            if (this.syncConfig.syncIntervalId) {
+                clearInterval(this.syncConfig.syncIntervalId);
+                this.syncConfig.syncIntervalId = null;
+            }
+            
+            // Save the new frequency setting
+            this.saveSyncConfig();
+            
+            // If not manual, set up the next sync time
+            if (this.syncConfig.frequency !== 'manual') {
+                // If we have a last sync time, calculate next from that
+                if (this.syncConfig.lastSync) {
+                    this.calculateNextSyncTime(new Date(this.syncConfig.lastSync));
+                } else {
+                    // Otherwise, set next sync based on now
+                    this.calculateNextSyncTime(new Date());
+                }
+                
+                // Set up checking interval (check every 30 seconds)
+                this.syncConfig.syncIntervalId = setInterval(() => {
+                    this.checkAndScheduleSync();
+                }, 30000); // Check every 30 seconds
+            } else {
+                // If manual, clear the next sync time
+                this.syncConfig.nextSync = '';
+            }
+        },
+        
+        // Calculate the next sync time based on frequency and last sync
+        calculateNextSyncTime(lastSyncDate) {
+            let nextSync = new Date();
+            
+            switch (this.syncConfig.frequency) {
+                case 'hourly':
+                    nextSync = new Date(lastSyncDate);
+                    nextSync.setHours(nextSync.getHours() + 1);
+                    break;
+                    
+                case 'daily':
+                    nextSync = new Date(lastSyncDate);
+                    nextSync.setDate(nextSync.getDate() + 1);
+                    nextSync.setHours(12, 0, 0); // Noon by default
+                    break;
+                    
+                case 'weekly':
+                    nextSync = new Date(lastSyncDate);
+                    nextSync.setDate(nextSync.getDate() + 7);
+                    nextSync.setHours(12, 0, 0); // Noon by default
+                    break;
+                    
+                case 'custom':
+                    if (this.syncConfig.customType === 'interval') {
+                        // For interval-based scheduling
+                        nextSync = new Date(lastSyncDate);
+                        if (this.syncConfig.intervalUnit === 'minutes') {
+                            nextSync.setMinutes(nextSync.getMinutes() + this.syncConfig.intervalValue);
+                        } else {
+                            nextSync.setHours(nextSync.getHours() + this.syncConfig.intervalValue);
+                        }
+                    } else {
+                        // For specific time-based scheduling
+                        nextSync = this.getNextSpecificTime();
+                    }
+                    break;
+                    
+                default:
+                    return; // Manual mode, no next sync
+            }
+            
+            this.syncConfig.nextSync = this.formatDateTime(nextSync);
+        },
+        
+        // Calculate the next sync time for specific time-based scheduling
+        getNextSpecificTime() {
+            // Parse the sync time
+            const [hours, minutes] = this.syncConfig.syncTime.split(':').map(Number);
+            
+            // Get the current date and time
+            const now = new Date();
+            
+            // If no days are selected, use all days
+            const syncDays = this.syncConfig.syncDays.length > 0 
+                ? this.syncConfig.syncDays.map(Number) 
+                : [0, 1, 2, 3, 4, 5, 6];
+            
+            // Try each day, starting from today
+            let nextSync = null;
+            for (let i = 0; i < 7; i++) {
+                // Create a date for "today + i days" at the specified sync time
+                const testDate = new Date(now);
+                testDate.setDate(testDate.getDate() + i);
+                testDate.setHours(hours, minutes, 0, 0);
+                
+                // Check if this day of the week is in our sync days
+                if (syncDays.includes(testDate.getDay())) {
+                    // If it's today, make sure it's in the future
+                    if (i === 0 && testDate <= now) {
+                        continue; // Skip if it's in the past
+                    }
+                    
+                    nextSync = testDate;
+                    break;
+                }
+            }
+            
+            // If we didn't find a next sync time, use the first selected day next week
+            if (!nextSync && syncDays.length > 0) {
+                nextSync = new Date();
+                // Find the first selected day
+                const firstDay = Math.min(...syncDays);
+                
+                // Calculate days to add to get to that day next week
+                const currentDay = nextSync.getDay();
+                const daysToAdd = (7 - currentDay + firstDay) % 7;
+                
+                nextSync.setDate(nextSync.getDate() + daysToAdd);
+                nextSync.setHours(hours, minutes, 0, 0);
+            }
+            
+            return nextSync || new Date(now.setDate(now.getDate() + 1)); // Fallback to tomorrow
+        },
+        
+        // Check if current time is within quiet hours
+        isQuietHours() {
+            if (!this.syncConfig.quietHoursEnabled) return false;
+            
+            const now = new Date();
+            const currentTime = now.getHours() * 60 + now.getMinutes();
+            
+            // Parse quiet hours times
+            const [startHours, startMinutes] = this.syncConfig.quietHoursStart.split(':').map(Number);
+            const [endHours, endMinutes] = this.syncConfig.quietHoursEnd.split(':').map(Number);
+            
+            const quietStart = startHours * 60 + startMinutes;
+            const quietEnd = endHours * 60 + endMinutes;
+            
+            // Check if current time is in quiet hours
+            if (quietStart < quietEnd) {
+                // Normal case: e.g., 22:00 to 08:00
+                return currentTime >= quietStart && currentTime < quietEnd;
+            } else {
+                // Overnight case: e.g., 22:00 to 08:00
+                return currentTime >= quietStart || currentTime < quietEnd;
+            }
+        },
+        
+        // Format a date for display
+        formatDateTime(date) {
+            if (!date) return '';
+            
+            // Format: YYYY-MM-DD HH:MM
+            return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+        },
+        
+        // Check if it's time to sync and perform sync if needed
+        checkAndScheduleSync() {
+            // Only proceed if not in manual mode and we have a next sync time
+            if (this.syncConfig.frequency === 'manual' || !this.syncConfig.nextSync) {
+                return;
+            }
+            
+            const now = new Date();
+            const nextSync = new Date(this.syncConfig.nextSync);
+            
+            // If it's time to sync and not in quiet hours
+            if (now >= nextSync && !this.isQuietHours() && !this.syncing) {
+                console.log('Auto-sync triggered at', this.formatDateTime(now));
+                
+                // Perform the sync
+                this.syncCredentials()
+                    .then(() => {
+                        console.log('Auto-sync completed successfully');
+                        
+                        // Show browser notification if enabled
+                        if (this.syncConfig.showNotifications && 'Notification' in window && Notification.permission === 'granted') {
+                            new Notification('SyncAuth', {
+                                body: 'Credentials synchronized successfully',
+                                icon: '/static/favicon.ico'
+                            });
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Auto-sync failed:', error);
+                        
+                        // Show browser notification for failure if enabled
+                        if (this.syncConfig.showNotifications && 'Notification' in window && Notification.permission === 'granted') {
+                            new Notification('SyncAuth - Sync Failed', {
+                                body: 'Failed to synchronize credentials: ' + (error.message || 'Unknown error'),
+                                icon: '/static/favicon.ico'
+                            });
+                        }
+                    });
+            }
+        },
+        
         // UI Helpers
         showStatus(type, message, isError = false, isHTML = false) {
             // Update status messages in the state
@@ -834,9 +1183,119 @@ document.addEventListener('alpine:init', () => {
                 deviceId: '',
                 address: '',
                 apiKey: '',
-                syncEnabled: true
+                syncEnabled: true // Keep default as true
             };
             this.editingClientId = null;
+        },
+        
+        // Add password change button to the header navigation
+        addPasswordChangeButton() {
+            // Check if the button already exists
+            if (document.getElementById('change-password-btn')) {
+                return;
+            }
+            
+            // Add the button before the logout button
+            const logoutBtn = document.getElementById('logout-btn');
+            if (logoutBtn) {
+                const passwordBtn = document.createElement('a');
+                passwordBtn.id = 'change-password-btn';
+                passwordBtn.href = '#';
+                passwordBtn.innerHTML = '<i class="fa-solid fa-key"></i> Change Password';
+                passwordBtn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    this.openPasswordModal();
+                });
+                
+                logoutBtn.parentNode.insertBefore(passwordBtn, logoutBtn);
+            }
+        },
+        
+        // Open the password change modal
+        openPasswordModal() {
+            this.resetPasswordForm();
+            this.clearStatus('password');
+            this.openModal('password');
+        },
+        
+        // Reset the password change form
+        resetPasswordForm() {
+            this.passwordForm = {
+                currentPassword: '',
+                newPassword: '',
+                confirmPassword: '',
+                syncOption: 'master'
+            };
+        },
+        
+        // Change the Syncthing GUI password
+        async changePassword() {
+            try {
+                // Clear previous status messages
+                this.clearStatus('password');
+                
+                // Validate password form
+                if (!this.passwordForm.currentPassword) {
+                    this.showStatus('password', 'Current password is required', true);
+                    return;
+                }
+                
+                if (!this.passwordForm.newPassword) {
+                    this.showStatus('password', 'New password is required', true);
+                    return;
+                }
+                
+                if (this.passwordForm.newPassword !== this.passwordForm.confirmPassword) {
+                    this.showStatus('password', 'New password and confirmation do not match', true);
+                    return;
+                }
+                
+                if (this.passwordForm.newPassword.length < 8) {
+                    this.showStatus('password', 'Password must be at least 8 characters long', true);
+                    return;
+                }
+                
+                // Set loading state
+                this.changingPassword = true;
+                this.showStatus('password', 'Changing password...', false);
+                
+                // Send password change request
+                const response = await axios.post('/api/change-password', {
+                    currentPassword: this.passwordForm.currentPassword,
+                    newPassword: this.passwordForm.newPassword,
+                    syncToClients: this.passwordForm.syncOption === 'all'
+                });
+                
+                if (response.data.success) {
+                    let message = 'Password changed successfully';
+                    
+                    // Add sync results if available
+                    if (response.data.syncResults && response.data.syncResults.length > 0) {
+                        message += ':<ul>';
+                        response.data.syncResults.forEach(result => {
+                            const statusClass = result.success ? 'success' : 'error';
+                            const icon = result.success ? '✓' : '✗';
+                            message += `<li class="${statusClass}"><strong>${icon} ${result.client}</strong>: ${result.message}</li>`;
+                        });
+                        message += '</ul>';
+                    }
+                    
+                    this.showStatus('password', message, false, true);
+                    
+                    // Close the modal after a short delay if successful
+                    setTimeout(() => {
+                        this.closeModal('password');
+                        this.resetPasswordForm();
+                    }, 3000);
+                } else {
+                    this.showStatus('password', `Failed to change password: ${response.data.error}`, true);
+                }
+            } catch (error) {
+                console.error('Error changing password:', error);
+                this.showStatus('password', `Error: ${error.response?.data?.error || error.message || 'Unknown error'}`, true);
+            } finally {
+                this.changingPassword = false;
+            }
         }
     }));
 });

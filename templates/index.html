@@ -13,13 +13,18 @@
 <body>
     <header>
         <div class="container">
-            <h1>SyncAuth</h1>
-            <nav>
-                <a href="#master-section">Master</a>
-                <a href="#credentials-section">Credentials</a>
-                <a href="#devices-section">Devices</a>
-                <a href="{{ url_for('logout') }}" id="logout-btn">Logout</a>
-            </nav>
+            <div class="header-content">
+                <div class="logo-area">
+                    <h1><i class="fa-solid fa-rotate-right"></i> SyncAuth</h1>
+                    <span class="tagline">Syncthing Credential Manager</span>
+                </div>
+                <nav>
+                    <a href="#master-section"><i class="fa-solid fa-server"></i> Master</a>
+                    <a href="#credentials-section"><i class="fa-solid fa-key"></i> Credentials</a>
+                    <a href="#devices-section"><i class="fa-solid fa-laptop"></i> Devices</a>
+                    <a href="{{ url_for('logout') }}" id="logout-btn"><i class="fa-solid fa-sign-out-alt"></i> Logout</a>
+                </nav>
+            </div>
         </div>
     </header>
 
@@ -29,9 +34,91 @@
         <div class="alert {% if db_status.status == 'error' %}error{% elif db_status.status == 'needs_key' %}error{% elif db_status.status == 'encrypted_or_corrupt' %}error{% elif db_status.status == 'unencrypted' %}warning{% endif %}">
             <h3>Database Status: {{ db_status.status|title }}</h3>
             <p>{{ db_status.message }}</p>
+            
+            {% if db_status.status == 'unencrypted' and db_status.key_provided %}
+            <div class="resolution-options" x-data="dbManagement">
+                <p><strong>Resolution Options:</strong></p>
+                <ol>
+                    <li><strong>Encrypt the database</strong> (recommended for security)</li>
+                    <li><strong>Remove the SECRET_KEY</strong> from your .env file and restart the container</li>
+                    <li><strong>Delete and create a new database</strong> (start fresh with encryption)</li>
+                </ol>
+                
+                <!-- Authentication needed message -->
+                <template x-if="!authenticated">
+                    <div class="auth-message">
+                        <button class="btn btn-primary" @click="showAuthModal = true">
+                            <i class="fas fa-lock"></i> Authenticate to Manage Database
+                        </button>
+                    </div>
+                </template>
+                
+                <!-- Database Action Buttons (only shown when authenticated) -->
+                <template x-if="authenticated">
+                    <div class="db-action-buttons">
+                        <button class="btn btn-success" @click="performDbAction('encrypt')">
+                            <i class="fas fa-lock"></i> Encrypt Database
+                        </button>
+                        <button class="btn btn-danger" @click="if(confirm('Are you sure you want to delete and recreate your database? This will cause ALL data to be lost.')) performDbAction('delete_recreate')">
+                            <i class="fas fa-trash"></i> Delete &amp; Recreate
+                        </button>
+                    </div>
+                </template>
+                
+                <!-- Authentication Modal -->
+                <div class="modal" :class="{'show': showAuthModal}">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h3>Authentication Required</h3>
+                            <span class="close" @click="showAuthModal = false">&times;</span>
+                        </div>
+                        <div class="modal-body">
+                            <div x-show="errorMsg" class="alert alert-error" x-text="errorMsg"></div>
+                            <div x-show="successMsg" class="alert alert-success" x-text="successMsg"></div>
+                            
+                            <div class="auth-tabs">
+                                <button class="auth-tab" :class="{'active': authMethod === 'password'}" @click="authMethod = 'password'">
+                                    Username/Password
+                                </button>
+                                <button class="auth-tab" :class="{'active': authMethod === 'apikey'}" @click="authMethod = 'apikey'">
+                                    API Key
+                                </button>
+                            </div>
+                            
+                            <div class="auth-tab-content">
+                                <!-- Username/Password inputs -->
+                                <div x-show="authMethod === 'password'" class="auth-form">
+                                    <div class="form-group">
+                                        <label>Username:</label>
+                                        <input type="text" x-model="username" class="form-control">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Password:</label>
+                                        <input type="password" x-model="password" class="form-control">
+                                    </div>
+                                </div>
+                                
+                                <!-- API Key input -->
+                                <div x-show="authMethod === 'apikey'" class="auth-form">
+                                    <div class="form-group">
+                                        <label>API Key:</label>
+                                        <input type="password" x-model="apikey" class="form-control">
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="modal-footer">
+                                <button class="btn btn-secondary" @click="showAuthModal = false">Cancel</button>
+                                <button class="btn btn-primary" @click="authenticate()">Authenticate</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
         </div>
         {% endif %}
-
+        
         <!-- Master Configuration Section -->
         <section id="master-section" class="card">
             <h2>Master Configuration</h2>
@@ -61,8 +148,137 @@
             
             <form id="credentials-form" @submit.prevent="syncCredentials">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <div class="form-group">
+                    <label for="sync-frequency">Sync Frequency:</label>
+                    <select id="sync-frequency" x-model="syncConfig.frequency" @change="updateSyncFrequency">
+                        <option value="manual">Manual Only</option>
+                        <option value="hourly">Every Hour</option>
+                        <option value="daily">Once Daily</option>
+                        <option value="weekly">Once Weekly</option>
+                        <option value="custom">Custom Schedule</option>
+                    </select>
+                    <p class="help-text">
+                        <span x-show="syncConfig.frequency === 'manual'">Credentials will only be synced when you click the button.</span>
+                        <span x-show="syncConfig.frequency === 'hourly'">Credentials will be synced automatically every hour.</span>
+                        <span x-show="syncConfig.frequency === 'daily'">Credentials will be synced automatically once per day.</span>
+                        <span x-show="syncConfig.frequency === 'weekly'">Credentials will be synced automatically once per week.</span>
+                        <span x-show="syncConfig.frequency === 'custom'">Credentials will be synced according to your custom schedule.</span>
+                    </p>
+                </div>
+                
+                <!-- Custom Schedule Options -->
+                <div x-show="syncConfig.frequency === 'custom'" class="custom-schedule-options">
+                    <div class="form-group">
+                        <label>Schedule Type:</label>
+                        <div class="radio-group">
+                            <label class="radio-label">
+                                <input type="radio" name="scheduleType" value="interval" x-model="syncConfig.customType">
+                                Interval
+                            </label>
+                            <label class="radio-label">
+                                <input type="radio" name="scheduleType" value="specific" x-model="syncConfig.customType">
+                                Specific Time
+                            </label>
+                        </div>
+                    </div>
+                    
+                    <!-- Interval-based scheduling -->
+                    <div x-show="syncConfig.customType === 'interval'" class="form-row">
+                        <div class="form-group">
+                            <label for="interval-value">Sync every:</label>
+                            <div class="input-group">
+                                <input type="number" id="interval-value" min="1" max="24" x-model.number="syncConfig.intervalValue">
+                                <select x-model="syncConfig.intervalUnit">
+                                    <option value="minutes">Minutes</option>
+                                    <option value="hours">Hours</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Specific time scheduling -->
+                    <div x-show="syncConfig.customType === 'specific'" class="form-row">
+                        <div class="form-group">
+                            <label for="sync-time">Time of day:</label>
+                            <input type="time" id="sync-time" x-model="syncConfig.syncTime">
+                        </div>
+                        
+                        <div class="form-group" x-show="syncConfig.customType === 'specific'">
+                            <label for="sync-days">Days to sync:</label>
+                            <div class="checkbox-grid">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" value="0" x-model="syncConfig.syncDays"> Sunday
+                                </label>
+                                <label class="checkbox-label">
+                                    <input type="checkbox" value="1" x-model="syncConfig.syncDays"> Monday
+                                </label>
+                                <label class="checkbox-label">
+                                    <input type="checkbox" value="2" x-model="syncConfig.syncDays"> Tuesday
+                                </label>
+                                <label class="checkbox-label">
+                                    <input type="checkbox" value="3" x-model="syncConfig.syncDays"> Wednesday
+                                </label>
+                                <label class="checkbox-label">
+                                    <input type="checkbox" value="4" x-model="syncConfig.syncDays"> Thursday
+                                </label>
+                                <label class="checkbox-label">
+                                    <input type="checkbox" value="5" x-model="syncConfig.syncDays"> Friday
+                                </label>
+                                <label class="checkbox-label">
+                                    <input type="checkbox" value="6" x-model="syncConfig.syncDays"> Saturday
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Advanced Options -->
+                <div class="form-group">
+                    <div class="collapsible">
+                        <input type="checkbox" id="advanced-options-toggle" class="toggle">
+                        <label for="advanced-options-toggle" class="toggle-label">Advanced Options <i class="fa-solid fa-chevron-down"></i></label>
+                        <div class="collapsible-content">
+                            <div class="form-group">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" x-model="syncConfig.showNotifications">
+                                    Show browser notifications for sync results
+                                </label>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" x-model="syncConfig.quietHoursEnabled">
+                                    Enable quiet hours (no automatic syncs during this time)
+                                </label>
+                            </div>
+                            
+                            <div class="form-row" x-show="syncConfig.quietHoursEnabled">
+                                <div class="form-group">
+                                    <label for="quiet-hours-start">From:</label>
+                                    <input type="time" id="quiet-hours-start" x-model="syncConfig.quietHoursStart">
+                                </div>
+                                <div class="form-group">
+                                    <label for="quiet-hours-end">To:</label>
+                                    <input type="time" id="quiet-hours-end" x-model="syncConfig.quietHoursEnd">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
                 <div class="form-actions">
-                    <button type="submit" class="btn primary">Sync Credentials to All Enabled Clients</button>
+                    <div class="sync-info">
+                        <span class="last-sync" x-show="syncConfig.lastSync">
+                            <i class="fa-solid fa-clock-rotate-left"></i> Last sync: <span x-text="syncConfig.lastSync"></span>
+                        </span>
+                        <span class="next-sync" x-show="syncConfig.nextSync && syncConfig.frequency !== 'manual'">
+                            <i class="fa-solid fa-calendar"></i> Next sync: <span x-text="syncConfig.nextSync"></span>
+                        </span>
+                    </div>
+                    <button type="submit" class="btn primary">
+                        <i class="fa-solid fa-sync" :class="{'fa-spin': syncing}"></i> 
+                        <span x-text="syncing ? 'Syncing...' : 'Sync Credentials Now'"></span>
+                    </button>
                 </div>
             </form>
         </section>
@@ -154,12 +370,6 @@
                             <label for="client-api-key">API Key:</label>
                             <input type="password" id="client-api-key" name="api_key" x-model="clientForm.apiKey" required>
                         </div>
-                        <div class="form-group">
-                            <label class="checkbox-label">
-                                <input type="checkbox" id="client-sync-enabled" name="sync_enabled" x-model="clientForm.syncEnabled">
-                                Sync Enabled
-                            </label>
-                        </div>
                     </form>
                 </div>
                 <div class="modal-footer">
@@ -204,6 +414,60 @@
                 </div>
             </div>
         </div>
+
+        <!-- Password Change Modal -->
+        <div id="password-modal" class="modal" :class="{ 'active': modals.password }">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>Change Syncthing GUI Password</h3>
+                    <button type="button" class="modal-close" @click="closeModal('password')">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <form id="password-form" @submit.prevent="changePassword">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        
+                        <div class="form-group">
+                            <label for="current-password">Current Password:</label>
+                            <input type="password" id="current-password" x-model="passwordForm.currentPassword" required>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="new-password">New Password:</label>
+                            <input type="password" id="new-password" x-model="passwordForm.newPassword" required>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="confirm-password">Confirm New Password:</label>
+                            <input type="password" id="confirm-password" x-model="passwordForm.confirmPassword" required>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label class="radio-label">
+                                <input type="radio" name="sync-option" value="master" x-model="passwordForm.syncOption">
+                                Update Master Only
+                            </label>
+                            <span class="help-text">Apply the password change only to the master Syncthing instance</span>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label class="radio-label">
+                                <input type="radio" name="sync-option" value="all" x-model="passwordForm.syncOption">
+                                Update Master & Sync to All Devices
+                            </label>
+                            <span class="help-text">Apply the password change to all enabled Syncthing instances</span>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <div id="password-status" class="status-message" style="display: none" x-html="statusMessages.password"></div>
+                    <button type="button" class="btn danger" @click="closeModal('password')">Cancel</button>
+                    <button type="button" class="btn primary" :disabled="!isPasswordFormValid" @click="changePassword">
+                        <i class="fa-solid fa-key"></i> 
+                        <span x-text="changingPassword ? 'Changing...' : 'Change Password'"></span>
+                    </button>
+                </div>
+            </div>
+        </div>
     </main>
 
     <footer>
@@ -212,6 +476,278 @@
         </div>
     </footer>
 
+    <!-- Font Awesome for icons -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.3.0/js/all.min.js"></script>
     <script src="{{ url_for('static', filename='script.js') }}"></script>
+
+    <style>
+        /* Add more CSS styles for the modal and auth features */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            overflow: auto;
+            background-color: rgba(0,0,0,0.4);
+        }
+        
+        .modal.show {
+            display: block;
+        }
+        
+        .modal-content {
+            background-color: #fefefe;
+            margin: 15% auto;
+            padding: 20px;
+            border: 1px solid #888;
+            width: 80%;
+            max-width: 500px;
+            border-radius: 5px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+        }
+        
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #ddd;
+            padding-bottom: 10px;
+            margin-bottom: 15px;
+        }
+        
+        .modal-header h3 {
+            margin: 0;
+        }
+        
+        .modal-footer {
+            border-top: 1px solid #ddd;
+            padding-top: 15px;
+            margin-top: 15px;
+            text-align: right;
+        }
+        
+        .close {
+            color: #aaa;
+            float: right;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        
+        .close:hover {
+            color: #555;
+        }
+        
+        .auth-tabs {
+            display: flex;
+            margin-bottom: 15px;
+        }
+        
+        .auth-tab {
+            background-color: #f8f9fa;
+            padding: 8px 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px 4px 0 0;
+            cursor: pointer;
+            margin-right: 5px;
+        }
+        
+        .auth-tab.active {
+            background-color: #fff;
+            border-bottom-color: #fff;
+        }
+        
+        .auth-tab-content {
+            border: 1px solid #ddd;
+            padding: 15px;
+            border-radius: 0 4px 4px 4px;
+            margin-top: -1px;
+        }
+        
+        .db-action-buttons {
+            margin-top: 15px;
+            display: flex;
+            gap: 10px;
+        }
+        
+        .form-group {
+            margin-bottom: 15px;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+        }
+        
+        .form-control {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        
+        .btn-primary {
+            background-color: #0d6efd;
+            color: white;
+            border: none;
+            padding: 8px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        
+        .btn-secondary {
+            background-color: #6c757d;
+            color: white;
+        }
+        
+        .btn-success {
+            background-color: #198754;
+            color: white;
+        }
+        
+        .btn-danger {
+            background-color: #dc3545;
+            color: white;
+        }
+        
+        .alert-error, .alert-danger {
+            background-color: #f8d7da;
+            color: #721c24;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+        }
+        
+        .alert-success {
+            background-color: #d4edda;
+            color: #155724;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+        }
+    </style>
+
+    <!-- Include Alpine.js right before closing body tag -->
+    <script src="https://cdn.jsdelivr.net/npm/alpinejs@3.10.2/dist/cdn.min.js"></script>
+    
+    <script>
+        // Alpine.js methods for database management
+        document.addEventListener('alpine:init', () => {
+            Alpine.data('dbManagement', () => ({
+                authenticated: false,
+                showAuthModal: false,
+                authMethod: 'password',
+                username: '',
+                password: '',
+                apikey: '',
+                errorMsg: '',
+                successMsg: '',
+                
+                init() {
+                    // Check authentication status when component loads
+                    fetch('/api/auth_status')
+                        .then(response => response.json())
+                        .then(data => { 
+                            this.authenticated = data.authenticated;
+                        })
+                        .catch(error => {
+                            console.error('Error checking auth status:', error);
+                            this.errorMsg = 'Error checking authentication status';
+                        });
+                },
+                
+                authenticate() {
+                    // Reset messages
+                    this.errorMsg = '';
+                    this.successMsg = '';
+                    
+                    // Prepare auth data based on selected method
+                    let authData = {};
+                    if (this.authMethod === 'password') {
+                        if (!this.username || !this.password) {
+                            this.errorMsg = 'Please enter both username and password';
+                            return;
+                        }
+                        authData = {
+                            username: this.username,
+                            password: this.password
+                        };
+                    } else {
+                        if (!this.apikey) {
+                            this.errorMsg = 'Please enter your API key';
+                            return;
+                        }
+                        authData = {
+                            apikey: this.apikey
+                        };
+                    }
+                    
+                    // Send authentication request
+                    fetch('/api/authenticate', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify(authData)
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            this.successMsg = data.message || 'Authentication successful';
+                            this.authenticated = true;
+                            // Close modal after a short delay
+                            setTimeout(() => {
+                                this.showAuthModal = false;
+                            }, 1500);
+                        } else {
+                            this.errorMsg = data.message || 'Authentication failed';
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error during authentication:', error);
+                        this.errorMsg = 'Error during authentication';
+                    });
+                },
+                
+                performDbAction(action) {
+                    // Reset messages
+                    this.errorMsg = '';
+                    this.successMsg = '';
+                    
+                    // Send database action request
+                    fetch('/api/db_action', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ action: action })
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            if (data.redirect) {
+                                // If we need to redirect, show message and then redirect
+                                alert(data.message);
+                                window.location.href = data.redirect;
+                            } else {
+                                alert(data.message);
+                                // Reload the page to reflect the changes
+                                window.location.reload();
+                            }
+                        } else {
+                            alert('Error: ' + (data.message || 'Unknown error'));
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error performing database action:', error);
+                        alert('Error performing database action. See console for details.');
+                    });
+                }
+            }));
+        });
+    </script>
 </body>
 </html>

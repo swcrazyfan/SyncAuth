@@ -5,6 +5,41 @@ from syncthing_api import test_connection, get_configured_devices, set_gui_passw
 from functools import wraps
 from flask_wtf.csrf import CSRFProtect
 import time
+import sys
+import logging
+import sqlite3
+import shutil
+
+# Set up logging to capture everything
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
+
+# Create a custom logger to capture all output
+file_handler = logging.FileHandler('/data/debug.log')
+file_handler.setLevel(logging.DEBUG)
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+file_handler.setFormatter(formatter)
+logger.addHandler(file_handler)
+
+# Also redirect stdout and stderr to the log file
+class LoggerWriter:
+    def __init__(self, level):
+        self.level = level
+        self.buffer = []
+    
+    def write(self, message):
+        if message and message.strip():
+            self.level(message)
+    
+    def flush(self):
+        pass
+
+sys.stdout = LoggerWriter(logger.info)
+sys.stderr = LoggerWriter(logger.error)
+
+# Print startup message for debugging
+print("=== SyncAuth starting up ===")
+print(f"Environment variables: SECRET_KEY={os.environ.get('SECRET_KEY', '')[:5]}...")
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', os.urandom(24).hex())
@@ -139,13 +174,21 @@ def manage_encryption():
     print(f"FORM DATA: {request.form}")
     
     if action == 'encrypt':
+        print("=== ENCRYPTING DATABASE ===")
         # Encrypt the database with the current SECRET_KEY
         key = os.environ.get('SECRET_KEY', '')
+        print(f"SECRET_KEY from environment: {key[:5]}... (length: {len(key)})")
+        
         if not key:
-            flash('No encryption key provided in SECRET_KEY')
+            print("ERROR: No SECRET_KEY provided in environment")
+            flash('No encryption key provided in SECRET_KEY', 'error')
             return redirect(request.referrer or url_for('setup'))
-            
+        
+        # Attempt encryption using the improved encrypt_database function
+        print("Calling storage.encrypt_database...")  
         success = storage.encrypt_database(key)
+        print(f"Encryption result: {success}")
+        
         if success:
             flash('Database encrypted successfully')
         else:
@@ -669,6 +712,76 @@ def check_config_changes():
     except Exception as e:
         return jsonify({'success': False, 'error': f'Unexpected error: {str(e)}'})
 
+@app.route('/api/change-password', methods=['POST'])
+@login_required
+def change_password():
+    """Change the Syncthing GUI password with option to sync to clients."""
+    try:
+        data = request.get_json()
+        current_password = data.get('currentPassword')
+        new_password = data.get('newPassword')
+        sync_to_clients = data.get('syncToClients', False)
+        
+        if not current_password or not new_password:
+            return jsonify({'success': False, 'error': 'Both current and new password are required'}), 400
+        
+        # Get master config
+        master = storage.get_master_config()
+        if not master:
+            return jsonify({'success': False, 'error': 'Master configuration not found'}), 404
+        
+        # Verify current password against Syncthing
+        try:
+            username = session.get('username', 'syncauth')
+            if not verify_gui_credentials(master['address'], master['api_key'], username, current_password):
+                return jsonify({'success': False, 'error': 'Current password is incorrect'}), 401
+        except SyncthingApiError as e:
+            return jsonify({'success': False, 'error': f'Error verifying current password: {str(e)}'}), 500
+        
+        # Generate bcrypt hash for the new password (Syncthing's API will actually handle this)
+        # We're sending the plain password to Syncthing, which will hash it internally
+        
+        # Set new password on master
+        try:
+            set_gui_password(master['address'], master['api_key'], username, new_password)
+            
+            # If sync to clients is requested, sync the new password to all enabled clients
+            sync_results = []
+            if sync_to_clients:
+                enabled_clients = storage.get_all_clients(sync_enabled=True)
+                
+                # Get the new password hash from the master (after we set it)
+                master_gui_config = get_gui_config(master['address'], master['api_key'])
+                master_password_hash = master_gui_config.get('password')
+                
+                for client in enabled_clients:
+                    try:
+                        # Use the master's new hashed password for the client
+                        set_gui_password(client['address'], client['api_key'], username, master_password_hash)
+                        sync_results.append({
+                            'client': client['label'] or client['device_id'],
+                            'success': True,
+                            'message': 'Password updated successfully'
+                        })
+                    except Exception as client_error:
+                        sync_results.append({
+                            'client': client['label'] or client['device_id'],
+                            'success': False,
+                            'message': str(client_error)
+                        })
+            
+            return jsonify({
+                'success': True, 
+                'message': 'Password changed successfully', 
+                'syncResults': sync_results if sync_to_clients else None
+            })
+            
+        except SyncthingApiError as e:
+            return jsonify({'success': False, 'error': f'Error setting new password: {str(e)}'}), 500
+            
+    except Exception as e:
+        return jsonify({'success': False, 'error': f'Unexpected error: {str(e)}'}), 500
+
 @app.route('/delete_database', methods=['POST'])
 @login_required
 def delete_database():
@@ -713,6 +826,204 @@ def delete_database():
         print(traceback.format_exc())
         flash(f'Error deleting database: {str(e)}', 'error')
         return redirect(url_for('setup'))
+
+@app.route('/direct_encrypt', methods=['GET'])
+def direct_encrypt():
+    """Direct route for encrypting the database (no form submission)."""
+    print("=== DIRECT ENCRYPT DATABASE ===")
+    try:
+        secret_key = os.environ.get('SECRET_KEY', '')
+        if not secret_key:
+            return redirect(url_for('setup'))
+        
+        result = storage.encrypt_database(secret_key)
+        if result:
+            flash('Database encrypted successfully!')
+        else:
+            flash('Failed to encrypt database')
+    except Exception as e:
+        flash(f'Error: {str(e)}')
+    
+    return redirect(url_for('setup'))
+
+@app.route('/direct_reset', methods=['GET'])
+def direct_reset():
+    """Direct route for resetting database encryption (no form submission)."""
+    print("=== DIRECT RESET DATABASE ===")
+    try:
+        # Get the SECRET_KEY
+        secret_key = os.environ.get('SECRET_KEY', '')
+        if not secret_key:
+            return redirect(url_for('setup'))
+        
+        # Reset the database
+        result = storage.reset_encryption(secret_key)
+        if result:
+            flash('Database encryption reset successfully!')
+        else:
+            flash('Failed to reset database encryption')
+    except Exception as e:
+        flash(f'Error: {str(e)}')
+    
+    return redirect(url_for('setup'))
+
+@app.route('/api/authenticate', methods=['POST'])
+def api_authenticate():
+    """API endpoint for authenticating users for database management."""
+    if request.method == 'POST':
+        data = request.get_json()
+        username = data.get('username', '')
+        password = data.get('password', '')
+        apikey = data.get('apikey', '')
+        
+        # Get master configuration
+        master_config = storage.get_master_config()
+        if not master_config:
+            return jsonify({
+                'success': False,
+                'message': 'Master configuration not found'
+            }), 400
+        
+        authenticated = False
+        # Check if using master API key
+        if apikey:
+            if master_config and master_config.get('api_key') == apikey:
+                authenticated = True
+                session['db_authenticated'] = True
+            else:
+                return jsonify({
+                    'success': False,
+                    'message': 'Invalid API key'
+                }), 401
+        
+        # Check if using username/password
+        elif username and password:
+            try:
+                # Use the existing verification function
+                if verify_gui_credentials(master_config['address'], master_config['api_key'], username, password):
+                    authenticated = True
+                    session['db_authenticated'] = True
+                else:
+                    return jsonify({
+                        'success': False,
+                        'message': 'Invalid username or password'
+                    }), 401
+            except Exception as e:
+                flash(f'Authentication error: {str(e)}', 'error')
+                return jsonify({
+                    'success': False,
+                    'message': f'Authentication error: {str(e)}'
+                }), 500
+        else:
+            return jsonify({
+                'success': False,
+                'message': 'Please provide authentication credentials'
+            }), 400
+        
+        if authenticated:
+            return jsonify({
+                'success': True,
+                'message': 'Authentication successful'
+            })
+    
+    return jsonify({'success': False, 'message': 'Invalid request'}), 400
+
+@app.route('/api/db_action', methods=['POST'])
+@login_required
+def api_db_action():
+    """API endpoint for performing database actions after authentication."""
+    if request.method == 'POST':
+        data = request.get_json()
+        action = data.get('action', '')
+        
+        # Only allow these actions if user is authenticated for database management
+        if not session.get('db_authenticated', False):
+            return jsonify({
+                'success': False,
+                'message': 'Authentication required for database management'
+            }), 403
+        
+        if action == 'encrypt':
+            try:
+                result = storage.encrypt_database(os.environ.get('SECRET_KEY', ''))
+                if result:
+                    return jsonify({
+                        'success': True,
+                        'message': 'Database encrypted successfully!'
+                    })
+                else:
+                    return jsonify({
+                        'success': False,
+                        'message': 'Failed to encrypt database. Check logs for details.'
+                    }), 500
+            except Exception as e:
+                app.logger.error(f"Error encrypting database: {str(e)}")
+                return jsonify({
+                    'success': False,
+                    'message': f'Error encrypting database: {str(e)}'
+                }), 500
+                
+        elif action == 'reset':
+            try:
+                result = storage.reset_encryption(os.environ.get('SECRET_KEY', ''))
+                if result:
+                    return jsonify({
+                        'success': True,
+                        'message': 'Database encryption reset successfully!'
+                    })
+                else:
+                    return jsonify({
+                        'success': False,
+                        'message': 'Failed to reset database encryption. Check logs for details.'
+                    }), 500
+            except Exception as e:
+                app.logger.error(f"Error resetting encryption: {str(e)}")
+                return jsonify({
+                    'success': False,
+                    'message': f'Error resetting encryption: {str(e)}'
+                }), 500
+                
+        elif action == 'delete_recreate':
+            try:
+                # Backup the database first
+                db_path = storage.get_db_path()
+                backup_path = f"{db_path}.bak.{int(time.time())}"
+                shutil.copy2(db_path, backup_path)
+                
+                # Remove the database file
+                os.remove(db_path)
+                
+                # Initialize a new encrypted database
+                storage.init_db()
+                
+                # Clear the authentication since we have a new DB
+                session.pop('db_authenticated', None)
+                
+                return jsonify({
+                    'success': True,
+                    'message': f'Database deleted and recreated! Your old database was backed up to {backup_path}',
+                    'redirect': url_for('setup')
+                })
+            except Exception as e:
+                app.logger.error(f"Error recreating database: {str(e)}")
+                return jsonify({
+                    'success': False,
+                    'message': f'Error recreating database: {str(e)}'
+                }), 500
+        else:
+            return jsonify({
+                'success': False,
+                'message': f'Unknown action: {action}'
+            }), 400
+    
+    return jsonify({'success': False, 'message': 'Invalid request'}), 400
+
+@app.route('/api/auth_status', methods=['GET'])
+def api_auth_status():
+    """Check if the user is authenticated for database management."""
+    return jsonify({
+        'authenticated': session.get('db_authenticated', False)
+    })
 
 if __name__ == '__main__':
     host = os.environ.get('HOST', '0.0.0.0')
