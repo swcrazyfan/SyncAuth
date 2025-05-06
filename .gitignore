@@ -1,7 +1,8 @@
 .python-version
-.env.example
 .env
 /__pycache__
 /docker_data
 /venv
 syncauth.db
+.DS_Store
+.DS_Store

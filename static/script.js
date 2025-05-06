@@ -290,7 +290,19 @@ document.addEventListener('alpine:init', () => {
                 
                 if (response.data.success) {
                     console.log(`Loaded ${response.data.devices.length} devices`);
-                    this.devices = response.data.devices || [];
+                    
+                    // Fix for Alpine.js reactivity issues:
+                    // First, clear the array
+                    this.devices = [];
+                    
+                    // Then add each device one by one after a small delay
+                    // This helps Alpine.js properly track the changes
+                    setTimeout(() => {
+                        response.data.devices.forEach(device => {
+                            this.devices.push({...device});
+                        });
+                    }, 0);
+                    
                     this.clearStatus('devices');
                 } else {
                     throw new Error(response.data.error || 'Failed to load devices');
@@ -1153,22 +1165,36 @@ document.addEventListener('alpine:init', () => {
         
         // Modal handling
         openModal(modalName) {
+            console.log(`Opening modal: ${modalName}`);
+            
+            // Set the modal state to true
             this.modals[modalName] = true;
             
-            // Also update the DOM for backward compatibility
+            // Force Alpine.js to recognize the state change
+            // Directly update DOM for immediate visual feedback
             const modalElement = document.getElementById(`${modalName}-modal`);
             if (modalElement) {
                 modalElement.classList.add('active');
+                console.log(`Added active class to modal: ${modalName}`);
+            } else {
+                console.error(`Modal element not found: ${modalName}-modal`);
             }
         },
         
         closeModal(modalName) {
+            console.log(`Closing modal: ${modalName}`);
+            
+            // Set the modal state to false
             this.modals[modalName] = false;
             
-            // Also update the DOM for backward compatibility
+            // Force Alpine.js to recognize the state change
+            // Directly update DOM for immediate visual feedback
             const modalElement = document.getElementById(`${modalName}-modal`);
             if (modalElement) {
                 modalElement.classList.remove('active');
+                console.log(`Removed active class from modal: ${modalName}`);
+            } else {
+                console.error(`Modal element not found: ${modalName}-modal`);
             }
             
             if (modalName === 'client') {
