@@ -215,6 +215,62 @@ If you encounter synchronization issues:
 
 ## Development
 
+### Setup
+1. Install dependencies for backend:
+   ```
+   pip install -r requirements.txt
+   ```
+
+2. Install dependencies for frontend:
+   ```
+   cd frontend
+   yarn install
+   ```
+
+### Running in Development Mode
+When developing, you can now run both the Flask backend and Quasar dev server with a single command:
+
+```bash
+python backend/app.py --dev
+```
+
+This will:
+1. Start the Flask backend
+2. Automatically launch the Quasar dev server
+3. Forward all Quasar console output to your terminal
+4. Handle API proxying automatically
+5. Properly shut down both servers when you press Ctrl+C
+
+The app will be available at http://localhost:9000
+
+If you prefer to run them separately (for debugging or other purposes):
+
+1. Start the Quasar dev server:
+   ```
+   cd frontend
+   yarn quasar dev
+   ```
+
+2. In a separate terminal, start the Flask backend in dev mode:
+   ```
+   python backend/app.py --dev
+   ```
+
+### Building for Production
+
+1. Build the Quasar SPA:
+   ```
+   cd frontend
+   yarn build
+   ```
+   This will create production files in `frontend/dist/spa/`
+
+2. Run the Flask application in production mode:
+   ```
+   python backend/app.py
+   ```
+   Without the `--dev` flag, Flask will serve the built static files from `frontend/dist/spa/`.
+
 ### Docker Compose (Recommended for Development)
 
 Create a `docker-compose.yml` file:

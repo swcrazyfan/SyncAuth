@@ -1,0 +1,7 @@
+.python-version
+.env.example
+.env
+/__pycache__
+/docker_data
+/venv
+syncauth.db

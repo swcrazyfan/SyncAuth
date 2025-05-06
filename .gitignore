@@ -1,7 +1,3 @@
-.python-version
-.env.example
-.env
-/__pycache__
-/docker_data
-/venv
-syncauth.db
+/frontend/.yarn/cache
+.DS_Store
+.DS_Store
