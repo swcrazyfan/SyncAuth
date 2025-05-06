@@ -5,289 +5,212 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SyncAuth - Syncthing Credential Manager</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <!-- Alpine.js -->
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.13.5/dist/cdn.min.js"></script>
+    <!-- Axios for API requests -->
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
 </head>
 <body>
-    <div class="container">
-        <header>
+    <header>
+        <div class="container">
             <h1>SyncAuth</h1>
-            <h2>Syncthing Credential Synchronization Manager</h2>
-            <div class="user-controls">
-                <span class="username">Logged in as: {{ session.username }}</span>
-                <a href="{{ url_for('logout') }}" id="logout-btn" class="btn secondary">Logout</a>
-            </div>
-        </header>
+            <nav>
+                <a href="#master-section">Master</a>
+                <a href="#credentials-section">Credentials</a>
+                <a href="#devices-section">Devices</a>
+                <a href="{{ url_for('logout') }}" id="logout-btn">Logout</a>
+            </nav>
+        </div>
+    </header>
 
-        <div class="main-content">
-            <!-- Flash Messages -->
-            {% with messages = get_flashed_messages(with_categories=true) %}
-                {% if messages %}
-                    {% for category, message in messages %}
-                    <div class="card {% if category == 'error' %}error-message{% else %}success-message{% endif %}">
-                        {{ message }}
-                    </div>
-                    {% endfor %}
-                {% endif %}
-            {% endwith %}
+    <main class="container" x-data="syncAuthApp">
+        <!-- Status message for DB -->
+        {% if db_status and db_status.status != 'ok' %}
+        <div class="alert {% if db_status.status == 'error' %}error{% elif db_status.status == 'needs_key' %}error{% elif db_status.status == 'encrypted_or_corrupt' %}error{% elif db_status.status == 'unencrypted' %}warning{% endif %}">
+            <h3>Database Status: {{ db_status.status|title }}</h3>
+            <p>{{ db_status.message }}</p>
+        </div>
+        {% endif %}
+
+        <!-- Master Configuration Section -->
+        <section id="master-section" class="card">
+            <h2>Master Configuration</h2>
+            <div id="master-status" class="status-message" style="display: none;"></div>
             
-            <!-- Database Encryption Alert -->
-            {% if db_status.status != 'ok' %}
-            <section class="card db-alert-card">
-                <div class="db-alert {% if db_status.status == 'error' %}error{% elif db_status.status == 'needs_key' %}error{% elif db_status.status == 'encrypted_or_corrupt' %}error{% elif db_status.status == 'unencrypted' %}warning{% endif %}">
-                    <h3>Database Status: {{ db_status.status|title }}</h3>
-                    <p>{{ db_status.message }}</p>
-                    
-                    {% if db_status.status == 'unencrypted' and db_status.key_provided %}
-                    <form id="encrypt-db-form" action="{{ url_for('manage_encryption') }}" method="POST">
-                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                        <p>Options:</p>
-                        <ul>
-                            <li>Encrypt the database with the provided key</li>
-                            <li>Remove the SECRET_KEY environment variable if you prefer to keep the database unencrypted</li>
-                        </ul>
-                        <input type="hidden" name="action" value="encrypt">
-                        <button type="submit" class="btn primary">Encrypt Database</button>
-                    </form>
-                    {% endif %}
-                    
-                    {% if db_status.status == 'encrypted_or_corrupt' %}
-                    <form id="reset-db-form" action="{{ url_for('manage_encryption') }}" method="POST">
-                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                        <p>Options:</p>
-                        <ul>
-                            <li>Reset the database (a backup will be created automatically)</li>
-                            {% if not db_status.key_provided %}
-                            <li>If you want to use this as an encrypted database, you must provide the SECRET_KEY environment variable when running the Docker container</li>
-                            {% else %}
-                            <li>If you know the correct encryption key, update the SECRET_KEY environment variable and restart the container</li>
-                            {% endif %}
-                        </ul>
-                        <div class="form-group">
-                            <label class="checkbox-label">
-                                <input type="checkbox" id="create-backup" name="create_backup" checked>
-                                Create backup before reset
-                            </label>
-                        </div>
-                        <div class="form-group">
-                            <label for="new-key">New Encryption Key (optional):</label>
-                            <input type="password" id="new-key" name="new_key" placeholder="Leave empty for unencrypted database">
-                            <small>If you want encrypted database, enter a key here. Otherwise leave empty for unencrypted.</small>
-                        </div>
-                        <input type="hidden" name="action" value="reset">
-                        <button type="submit" class="btn warning">Reset Database</button>
-                    </form>
-                    {% endif %}
-                    
-                    {% if db_status.status == 'needs_key' %}
-                    <form id="reset-db-form" action="{{ url_for('manage_encryption') }}" method="POST">
-                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                        <p>Options:</p>
-                        <ul>
-                            <li>Reset the database (you will lose all configurations)</li>
-                            <li>If you know the current encryption key, provide it via SECRET_KEY environment variable and restart</li>
-                        </ul>
-                        <div class="form-group">
-                            <label class="checkbox-label">
-                                <input type="checkbox" id="create-backup" name="create_backup" checked>
-                                Create backup before reset
-                            </label>
-                        </div>
-                        <div class="form-group">
-                            <label for="new-key">New Encryption Key (optional):</label>
-                            <input type="password" id="new-key" name="new_key" placeholder="Leave empty for unencrypted database">
-                        </div>
-                        <input type="hidden" name="action" value="reset">
-                        <button type="submit" class="btn warning">Reset Database</button>
-                    </form>
-                    {% endif %}
+            <form id="master-form" @submit.prevent="saveMasterConfig">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <div class="form-group">
+                    <label for="master-address">Master Address:</label>
+                    <input type="text" id="master-address" name="address" placeholder="https://syncthing-master:8384" x-model="masterConfig.address" required>
                 </div>
-            </section>
-            {% endif %}
-            
-            <!-- Master Configuration Section -->
-            <section id="master-config" class="card">
-                <h2>Master Configuration</h2>
-                <form id="master-form">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <div class="form-group">
-                        <label for="master-address">Address (with protocol and port)</label>
-                        <input type="text" id="master-address" name="address" placeholder="https://syncthing-master.local:8384" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="master-api-key">API Key</label>
-                        <input type="password" id="master-api-key" name="api_key" placeholder="API Key" required>
-                    </div>
-                    <div class="form-actions">
-                        <button type="submit" class="btn primary">Save</button>
-                        <button type="button" id="test-master-connection" class="btn secondary">Test Connection</button>
-                    </div>
-                </form>
-                <div id="master-status" class="status-message"></div>
-            </section>
-
-            <!-- Credentials Sync Section -->
-            <section id="credentials-sync" class="card">
-                <h2>Synchronize Credentials</h2>
-                <p>Synchronize the current logged-in user's credentials ({{ session.username }}) to all enabled clients.</p>
-                <form id="credentials-form">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <div class="form-actions">
-                        <button type="submit" class="btn primary">Sync Credentials to All Enabled Clients</button>
-                    </div>
-                </form>
-                <div id="sync-status" class="status-message"></div>
-            </section>
-
-            <!-- Unified Device View -->
-            <section id="unified-devices" class="card">
-                <h2>Device Management</h2>
-                <p>Manage all Syncthing devices connected to your master instance.</p>
+                <div class="form-group">
+                    <label for="master-api-key">API Key:</label>
+                    <input type="password" id="master-api-key" name="api_key" placeholder="{{ '[API Key Set]' if master and master.api_key else 'Enter API Key' }}" x-model="masterConfig.apiKey">
+                </div>
                 <div class="form-actions">
-                    <button id="refresh-devices" class="btn secondary">Refresh Device Status</button>
-                    <button id="discover-devices" class="btn primary">Discover New Devices</button>
-                    <button id="add-client-btn" class="btn primary">Add New Client</button>
+                    <button type="button" class="btn secondary" @click="testMasterConnection">Test Connection</button>
+                    <button type="submit" class="btn primary">Save</button>
                 </div>
-                <div id="devices-status" class="status-message"></div>
-                <table id="devices-table">
-                    <thead>
+            </form>
+        </section>
+
+        <!-- Credentials Sync Section -->
+        <section id="credentials-section" class="card">
+            <h2>Credentials Synchronization</h2>
+            <div id="sync-status" class="status-message" style="display: none;" x-html="statusMessages.sync"></div>
+            
+            <form id="credentials-form" @submit.prevent="syncCredentials">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <div class="form-actions">
+                    <button type="submit" class="btn primary">Sync Credentials to All Enabled Clients</button>
+                </div>
+            </form>
+        </section>
+
+        <!-- Devices Section -->
+        <section id="devices-section" class="card">
+            <div class="section-header">
+                <h2>Unified Device View</h2>
+                <div class="actions">
+                    <button id="refresh-devices" class="btn secondary" @click="loadAllDevices">Refresh Devices</button>
+                    <button id="discover-devices" class="btn primary" @click="discoverDevices">Discover Devices</button>
+                    <button id="add-client-btn" class="btn success" @click="openModal('client')">Add Client</button>
+                </div>
+            </div>
+            
+            <div id="devices-status" class="status-message" style="display: none;" x-html="statusMessages.devices"></div>
+            
+            <table id="devices-table" class="data-table">
+                <thead>
+                    <tr>
+                        <th>Device ID</th>
+                        <th>Name</th>
+                        <th>Address</th>
+                        <th>Client</th>
+                        <th>Sync Enabled</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-if="!devices || devices.length === 0">
                         <tr>
-                            <th>Device Name</th>
-                            <th>Device ID</th>
-                            <th>Connection</th>
-                            <th>Actions</th>
+                            <td colspan="6" class="text-center">No devices found</td>
                         </tr>
-                    </thead>
-                    <tbody>
-                        <!-- Device rows will be populated by JavaScript -->
-                    </tbody>
-                </table>
-            </section>
+                    </template>
+                    <template x-for="device in devices" :key="device.deviceID">
+                        <tr>
+                            <td x-text="device.deviceID || ''"></td>
+                            <td x-text="device.name || 'Unknown'"></td>
+                            <td x-text="device.address || 'N/A'"></td>
+                            <td x-text="device.client_id ? '✓' : '✗'"></td>
+                            <td x-text="device.sync_enabled ? '✓' : '✗'"></td>
+                            <td class="actions">
+                                <template x-if="device.client_id">
+                                    <div>
+                                        <button class="btn" :class="device.sync_enabled ? 'danger' : 'primary'" 
+                                                @click="toggleClientSync(device.client_id, !device.sync_enabled)">
+                                            <span x-text="device.sync_enabled ? 'Disable Sync' : 'Enable Sync'"></span>
+                                        </button>
+                                        <button class="btn secondary" @click="editClient(device.client_id)">Edit</button>
+                                        <button class="btn danger" @click="deleteClient(device.client_id)">Delete</button>
+                                    </div>
+                                </template>
+                                <template x-if="!device.client_id">
+                                    <button class="btn primary" @click="enableSyncForDevice(device.address || '', device.deviceID, device.name)">
+                                        Enable Sync
+                                    </button>
+                                </template>
+                            </td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </section>
+
+        <!-- Client Modal -->
+        <div id="client-modal" class="modal" :class="{ 'active': modals.client }">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3 id="client-modal-title" x-text="editingClientId ? 'Edit Client' : 'Add Client'"></h3>
+                    <button type="button" class="modal-close" @click="closeModal('client')">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <form id="client-form">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <input type="hidden" id="client-id" name="id" x-model="clientForm.id">
+                        <div class="form-group">
+                            <label for="client-label">Label:</label>
+                            <input type="text" id="client-label" name="label" x-model="clientForm.label" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="client-device-id">Device ID:</label>
+                            <input type="text" id="client-device-id" name="device_id" x-model="clientForm.deviceId" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="client-address">Address:</label>
+                            <input type="text" id="client-address" name="address" x-model="clientForm.address" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="client-api-key">API Key:</label>
+                            <input type="password" id="client-api-key" name="api_key" x-model="clientForm.apiKey" required>
+                        </div>
+                        <div class="form-group">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="client-sync-enabled" name="sync_enabled" x-model="clientForm.syncEnabled">
+                                Sync Enabled
+                            </label>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn secondary" id="test-client-connection" @click="testClientConnection">Test Connection</button>
+                    <button type="button" class="btn danger" id="cancel-client-edit" @click="closeModal('client')">Cancel</button>
+                    <button type="button" class="btn primary" id="save-client" @click="saveClient">Save</button>
+                </div>
+            </div>
         </div>
 
-        <footer>
-            <p>SyncAuth - Syncthing Credential Synchronization Tool</p>
-        </footer>
-    </div>
-
-    <!-- Modal Dialogs -->
-    <!-- Client Form Modal -->
-    <div class="modal-overlay" id="client-modal">
-        <div class="modal-dialog">
-            <div class="modal-header">
-                <h3 id="client-modal-title">Add New Client</h3>
-                <button type="button" class="modal-close">&times;</button>
-            </div>
-            <div class="modal-body">
-                <form id="client-form">
-                    <input type="hidden" id="client-id" name="id">
+        <!-- Combined Modal (Address + API Key) -->
+        <div id="combined-modal" class="modal" :class="{ 'active': modals.combined }">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>Configure Device: <span id="combined-device-name" x-text="combinedModal.deviceName"></span></h3>
+                    <button type="button" class="modal-close" @click="closeModal('combined')">&times;</button>
+                </div>
+                <div class="modal-body">
                     <div class="form-group">
-                        <label for="client-label">Label</label>
-                        <input type="text" id="client-label" name="label" placeholder="Client Name" required>
+                        <label for="combined-address">Address:</label>
+                        <input type="text" id="combined-address" x-model="combinedModal.address" placeholder="e.g. https://192.168.1.100:8384">
+                        <div id="combined-address-suggestions" x-show="combinedModal.addressSuggestions.length > 0">
+                            <p>Detected addresses:</p>
+                            <div id="combined-address-buttons">
+                                <template x-for="(addr, index) in combinedModal.addressSuggestions" :key="index">
+                                    <button type="button" class="btn secondary address-suggestion" 
+                                            @click="combinedModal.address = addr.value" 
+                                            x-text="addr.display || addr.value"></button>
+                                </template>
+                            </div>
+                        </div>
                     </div>
                     <div class="form-group">
-                        <label for="client-device-id">Device ID</label>
-                        <input type="text" id="client-device-id" name="device_id" placeholder="Device ID" required>
+                        <label for="combined-api-key">API Key:</label>
+                        <input type="password" id="combined-api-key" x-model="combinedModal.apiKey" placeholder="Enter API Key">
                     </div>
-                    <div class="form-group">
-                        <label for="client-address">Address (with protocol and port)</label>
-                        <input type="text" id="client-address" name="address" placeholder="https://syncthing-client.local:8384" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="client-api-key">API Key</label>
-                        <input type="password" id="client-api-key" name="api_key" placeholder="API Key" required>
-                    </div>
-                    <div class="form-group">
-                        <label class="checkbox-label">
-                            <input type="checkbox" id="client-sync-enabled" name="sync_enabled" checked>
-                            Enable Sync
-                        </label>
-                    </div>
-                </form>
-            </div>
-            <div class="modal-footer">
-                <button type="button" id="test-client-connection" class="btn secondary">Test Connection</button>
-                <button type="button" id="cancel-client-edit" class="btn secondary">Cancel</button>
-                <button type="button" id="save-client" class="btn primary">Save Client</button>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn secondary" id="test-combined-connection" @click="testCombinedConnection">Test Connection</button>
+                    <button type="button" class="btn danger" id="cancel-combined" @click="closeModal('combined')">Cancel</button>
+                    <button type="button" class="btn primary" id="confirm-combined" @click="confirmCombined">Confirm</button>
+                </div>
             </div>
         </div>
-    </div>
+    </main>
 
-    <!-- API Key Modal -->
-    <div class="modal-overlay" id="api-key-modal">
-        <div class="modal-dialog">
-            <div class="modal-header">
-                <h3>Enter API Key</h3>
-                <button type="button" class="modal-close">&times;</button>
-            </div>
-            <div class="modal-body">
-                <div class="form-group">
-                    <label for="modal-api-key">API Key for <span id="api-key-device-name">device</span></label>
-                    <input type="password" id="modal-api-key" placeholder="Enter API Key" required>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" id="cancel-api-key" class="btn secondary">Cancel</button>
-                <button type="button" id="confirm-api-key" class="btn primary">Confirm</button>
-            </div>
+    <footer>
+        <div class="container">
+            <p>SyncAuth - Syncthing Credential Manager</p>
         </div>
-    </div>
-
-    <!-- Address Modal -->
-    <div class="modal-overlay" id="address-modal">
-        <div class="modal-dialog">
-            <div class="modal-header">
-                <h3>Enter Device Address</h3>
-                <button type="button" class="modal-close">&times;</button>
-            </div>
-            <div class="modal-body">
-                <div id="address-suggestions" class="address-suggestions" style="display: none; margin-bottom: 15px;">
-                    <p>Available addresses:</p>
-                    <div id="address-buttons" class="address-buttons">
-                        <!-- Address buttons will be added here dynamically -->
-                    </div>
-                </div>
-                <div class="form-group">
-                    <label for="modal-address">Syncthing Address</label>
-                    <input type="text" id="modal-address" placeholder="https://device:8384" required>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" id="cancel-address" class="btn secondary">Cancel</button>
-                <button type="button" id="confirm-address" class="btn primary">Confirm</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Combined Address and API Key Modal -->
-    <div class="modal-overlay" id="combined-modal">
-        <div class="modal-dialog">
-            <div class="modal-header">
-                <h3>Configure Device</h3>
-                <button type="button" class="modal-close">&times;</button>
-            </div>
-            <div class="modal-body">
-                <p>Configure sync for <span id="combined-device-name">device</span></p>
-                <div class="form-group">
-                    <label for="combined-address">Syncthing Address</label>
-                    <input type="text" id="combined-address" placeholder="https://device:8384" required>
-                </div>
-                <div id="combined-address-suggestions" class="address-suggestions" style="display: none; margin-bottom: 15px;">
-                    <p>Available addresses:</p>
-                    <div id="combined-address-buttons" class="address-buttons">
-                        <!-- Address buttons will be added here dynamically -->
-                    </div>
-                </div>
-                <div class="form-group">
-                    <label for="combined-api-key">API Key</label>
-                    <input type="password" id="combined-api-key" placeholder="Enter API Key" required>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" id="test-combined-connection" class="btn secondary">Test Connection</button>
-                <button type="button" id="cancel-combined" class="btn secondary">Cancel</button>
-                <button type="button" id="confirm-combined" class="btn primary">Save</button>
-            </div>
-        </div>
-    </div>
+    </footer>
 
     <script src="{{ url_for('static', filename='script.js') }}"></script>
 </body>

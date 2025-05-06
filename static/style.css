@@ -292,7 +292,7 @@ tbody tr:hover {
 }
 
 /* Modal Dialog */
-.modal-overlay {
+.modal {
     position: fixed;
     top: 0;
     left: 0;
@@ -308,12 +308,12 @@ tbody tr:hover {
     transition: opacity 0.3s ease, visibility 0.3s ease;
 }
 
-.modal-overlay.active {
+.modal.active {
     opacity: 1;
     visibility: visible;
 }
 
-.modal-dialog {
+.modal-content {
     background-color: white;
     border-radius: 8px;
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
@@ -325,7 +325,7 @@ tbody tr:hover {
     transition: transform 0.3s ease;
 }
 
-.modal-overlay.active .modal-dialog {
+.modal.active .modal-content {
     transform: translateY(0);
 }
 

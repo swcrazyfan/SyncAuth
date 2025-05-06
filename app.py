@@ -1,7 +1,7 @@
 import os
-from flask import Flask, request, render_template, jsonify, session, redirect, url_for, flash
+from flask import Flask, request, render_template, jsonify, session, redirect, url_for, flash, current_app
 import storage
-from syncthing_api import test_connection, get_configured_devices, set_gui_password, SyncthingApiError, verify_gui_credentials, get_connections, poll_events, check_for_config_saved_events
+from syncthing_api import test_connection, get_configured_devices, set_gui_password, SyncthingApiError, verify_gui_credentials, get_connections, poll_events, check_for_config_saved_events, get_gui_config
 from functools import wraps
 from flask_wtf.csrf import CSRFProtect
 import time
@@ -395,14 +395,33 @@ def sync_credentials():
                 'success': False, 
                 'error': 'No enabled clients to sync with'
             }), 400
+            
+        # First, get the GUI configuration from the master
+        try:
+            master_gui_config = get_gui_config(master['address'], master['api_key'])
+            
+            # Ensure the master has GUI credentials set
+            if not master_gui_config.get('user') or not master_gui_config.get('password'):
+                return jsonify({
+                    'success': False,
+                    'error': 'Master has no GUI credentials configured'
+                }), 400
+                
+            # Use the hashed password directly from the master config
+            master_password_hash = master_gui_config.get('password')
+            current_app.logger.info(f"Got hashed password from master: {master_password_hash[:10]}...")
+        except SyncthingApiError as e:
+            return jsonify({
+                'success': False,
+                'error': f'Failed to get master GUI config: {str(e)}'
+            }), 500
         
         # Update each client
         results = []
         for client in enabled_clients:
             try:
-                # Since we're already authenticated, set the current user's credentials
-                # We don't need to verify them again as we trust the session
-                set_gui_password(client['address'], client['api_key'], username, request.json.get('password', ''))
+                # Use the master's hashed password for all clients
+                set_gui_password(client['address'], client['api_key'], username, master_password_hash)
                 results.append({
                     'client_id': client['id'],
                     'label': client['label'],
@@ -426,6 +445,7 @@ def sync_credentials():
         })
         
     except Exception as e:
+        current_app.logger.error(f"Error in sync_credentials: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/test-connection', methods=['POST'])

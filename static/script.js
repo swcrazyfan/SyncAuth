@@ -1,1144 +1,21 @@
-// DOM Elements
-const masterForm = document.getElementById('master-form');
-const masterStatus = document.getElementById('master-status');
-const testMasterConnectionBtn = document.getElementById('test-master-connection');
-const credentialsForm = document.getElementById('credentials-form');
-const syncStatus = document.getElementById('sync-status');
-const discoverDevicesBtn = document.getElementById('discover-devices');
-const refreshDevicesBtn = document.getElementById('refresh-devices');
-const devicesStatus = document.getElementById('devices-status');
-const devicesTable = document.getElementById('devices-table').querySelector('tbody');
-const clientForm = document.getElementById('client-form');
-const clientFormTitle = document.getElementById('client-form-title');
-const cancelClientEditBtn = document.getElementById('cancel-client-edit');
-const testClientConnectionBtn = document.getElementById('test-client-connection');
-const logoutBtn = document.getElementById('logout-btn');
-const encryptDbForm = document.getElementById('encrypt-db-form');
-const resetDbForm = document.getElementById('reset-db-form');
+// SyncAuth Alpine.js Application
+document.addEventListener('DOMContentLoaded', () => {
+    // Add the CSRF token to all Axios requests
+    axios.defaults.headers.common['X-CSRFToken'] = getCsrfToken();
+    axios.defaults.headers.post['Content-Type'] = 'application/json';
+});
 
-// Get CSRF token from the form
-const getCsrfToken = () => {
+function getCsrfToken() {
     const csrfTokenField = document.querySelector('input[name="csrf_token"]');
     return csrfTokenField ? csrfTokenField.value : '';
-};
-
-// Modal elements
-const clientModal = document.getElementById('client-modal');
-const apiKeyModal = document.getElementById('api-key-modal');
-const addressModal = document.getElementById('address-modal');
-const combinedModal = document.getElementById('combined-modal');
-const addClientBtn = document.getElementById('add-client-btn');
-const clientModalTitle = document.getElementById('client-modal-title');
-const saveClientBtn = document.getElementById('save-client');
-const modalCloseButtons = document.querySelectorAll('.modal-close');
-const cancelClientBtn = document.getElementById('cancel-client-edit');
-const cancelApiKeyBtn = document.getElementById('cancel-api-key');
-const confirmApiKeyBtn = document.getElementById('confirm-api-key');
-const cancelAddressBtn = document.getElementById('cancel-address');
-const confirmAddressBtn = document.getElementById('confirm-address');
-const cancelCombinedBtn = document.getElementById('cancel-combined');
-const confirmCombinedBtn = document.getElementById('confirm-combined');
-const testCombinedConnectionBtn = document.getElementById('test-combined-connection');
-const apiKeyDeviceName = document.getElementById('api-key-device-name');
-const addressDeviceName = document.getElementById('address-device-name');
-const combinedDeviceName = document.getElementById('combined-device-name');
-const modalApiKey = document.getElementById('modal-api-key');
-const modalAddress = document.getElementById('modal-address');
-const combinedAddress = document.getElementById('combined-address');
-const combinedApiKey = document.getElementById('combined-api-key');
-const combinedAddressSuggestions = document.getElementById('combined-address-suggestions');
-const combinedAddressButtons = document.getElementById('combined-address-buttons');
-
-// Global state
-let editingClientId = null;
-let latestEventId = null;
-let configPollingInterval = null;
-
-// Global variables for tracking modal callbacks
-let onApiKeyConfirm = null;
-let onAddressConfirm = null;
-let onCombinedConfirm = null;
-let currentEditingClientId = null;
-
-// Helper Functions
-function showStatus(element, message, isError = false, isHTML = false) {
-    console.log(`Showing status: ${message} (isError: ${isError})`);
-    if (!element) {
-        console.error('Status element not found');
-        return;
-    }
-    
-    if (isHTML) {
-        // Sanitize HTML before inserting to prevent XSS
-        const sanitizedHTML = sanitizeHTML(message);
-        element.innerHTML = sanitizedHTML;
-    } else {
-        element.textContent = message;
-    }
-    element.style.display = 'block';
-    element.classList.toggle('error', isError);
-}
-
-function clearStatus(element) {
-    if (!element) {
-        console.error('Status element not found');
-        return;
-    }
-    element.textContent = '';
-    element.style.display = 'none';
-    element.classList.remove('error');
-}
-
-async function fetchJSON(url, options = {}) {
-    try {
-        // Add CSRF token to headers for all requests
-        const csrfToken = getCsrfToken();
-        const headers = {
-            'Content-Type': 'application/json',
-            'X-CSRFToken': csrfToken,
-            ...options.headers
-        };
-        
-        const response = await fetch(url, {
-            ...options,
-            headers: headers
-        });
-        
-        // Handle HTTP errors
-        if (!response.ok) {
-            if (response.status === 400 && response.statusText.includes('CSRF')) {
-                throw new Error('CSRF token validation failed. Please refresh the page and try again.');
-            }
-            throw new Error(`Server error: ${response.status} ${response.statusText}`);
-        }
-        
-        // Parse JSON response
-        const data = await response.json();
-        
-        // Check for application-specific errors
-        if (data.error) {
-            throw new Error(data.error);
-        }
-        
-        return data;
-    } catch (error) {
-        console.error('Fetch error:', error);
-        throw error;
-    }
-}
-
-// Modal functions
-function openModal(modal) {
-    modal.classList.add('active');
-}
-
-function closeModal(modal) {
-    modal.classList.remove('active');
-}
-
-function closeAllModals() {
-    closeModal(clientModal);
-    closeModal(apiKeyModal);
-    closeModal(addressModal);
-    closeModal(combinedModal);
-    // Reset callback functions
-    onApiKeyConfirm = null;
-    onAddressConfirm = null;
-    onCombinedConfirm = null;
-}
-
-function resetClientForm() {
-    clientForm.reset();
-    document.getElementById('client-id').value = '';
-    currentEditingClientId = null;
-}
-
-// Event listeners for modals
-modalCloseButtons.forEach(button => {
-    button.addEventListener('click', () => {
-        closeAllModals();
-    });
-});
-
-// Close modals when clicking outside
-document.addEventListener('click', (e) => {
-    if (e.target.classList.contains('modal-overlay')) {
-        closeAllModals();
-    }
-});
-
-// Add client button
-addClientBtn.addEventListener('click', () => {
-    resetClientForm();
-    clientModalTitle.textContent = 'Add New Client';
-    openModal(clientModal);
-});
-
-// Cancel client edit
-cancelClientBtn.addEventListener('click', () => {
-    closeModal(clientModal);
-    resetClientForm();
-});
-
-// Cancel API key entry
-cancelApiKeyBtn.addEventListener('click', () => {
-    closeModal(apiKeyModal);
-});
-
-// Cancel address entry
-cancelAddressBtn.addEventListener('click', () => {
-    closeModal(addressModal);
-});
-
-// Cancel combined entry
-cancelCombinedBtn.addEventListener('click', () => {
-    closeModal(combinedModal);
-});
-
-// Prompt for combined address and API key
-function promptForCombined(deviceName, addresses, defaultAddress) {
-    return new Promise((resolve, reject) => {
-        // Set device name
-        combinedDeviceName.textContent = deviceName || 'device';
-        
-        // Clear previous input and suggestions
-        combinedAddress.value = defaultAddress || '';
-        combinedApiKey.value = '';
-        combinedAddressButtons.innerHTML = '';
-        
-        // If we have multiple addresses, show the suggestions section
-        if (addresses && addresses.length > 1) {
-            combinedAddressSuggestions.style.display = 'block';
-            
-            // Add buttons for each address
-            addresses.forEach(address => {
-                const button = document.createElement('button');
-                button.type = 'button';
-                button.className = 'btn secondary address-option';
-                button.textContent = address.display || 'Use default port';
-                button.addEventListener('click', () => {
-                    combinedAddress.value = address.value;
-                });
-                combinedAddressButtons.appendChild(button);
-            });
-        } else {
-            combinedAddressSuggestions.style.display = 'none';
-        }
-        
-        // Set up confirm action
-        onCombinedConfirm = () => {
-            const address = combinedAddress.value;
-            const apiKey = combinedApiKey.value;
-            
-            if (!address) {
-                alert('Address is required');
-                return;
-            }
-            
-            if (!apiKey) {
-                alert('API key is required');
-                return;
-            }
-            
-            resolve({
-                address: address,
-                apiKey: apiKey
-            });
-            
-            closeModal(combinedModal);
-            
-            // Clean up
-            combinedAddressSuggestions.style.display = 'none';
-            combinedAddressButtons.innerHTML = '';
-        };
-        
-        // Open the modal
-        openModal(combinedModal);
-    });
-}
-
-// Confirm combined button
-confirmCombinedBtn.addEventListener('click', () => {
-    if (onCombinedConfirm) {
-        onCombinedConfirm();
-    }
-});
-
-// Test combined connection button
-testCombinedConnectionBtn.addEventListener('click', async () => {
-    try {
-        const address = combinedAddress.value;
-        const apiKey = combinedApiKey.value;
-        
-        if (!address || !apiKey) {
-            showStatus(devicesStatus, 'Address and API Key are required', true);
-            return;
-        }
-        
-        showStatus(devicesStatus, 'Testing connection...');
-        
-        const response = await fetch('/api/test-connection', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ address, api_key: apiKey })
-        });
-        
-        const data = await response.json();
-        
-        // Check the connected property which is how the API indicates success
-        if (data.connected) {
-            const deviceInfo = data.device_id ? ` (Device ID: ${data.device_id})` : '';
-            const version = data.version ? ` - Version: ${data.version}` : '';
-            alert(`Connection successful!${deviceInfo}${version}`);
-        } else {
-            throw new Error(data.error || 'Connection failed');
-        }
-    } catch (error) {
-        alert(`Connection test failed: ${error.message}`);
-    }
-});
-
-// Load Data Functions
-async function loadMasterConfig() {
-    try {
-        const data = await fetchJSON('/api/master');
-        
-        if (data.configured) {
-            document.getElementById('master-address').value = data.address;
-            // Don't set the API key field for security
-            document.getElementById('master-api-key').placeholder = '[API Key Set]';
-        }
-    } catch (error) {
-        showStatus(masterStatus, `Failed to load master configuration: ${error.message}`, true);
-    }
-}
-
-async function loadAllDevices() {
-    try {
-        showStatus(devicesStatus, 'Loading device status...');
-        
-        const data = await fetchJSON('/api/all-devices');
-        renderDeviceTable(data.devices);
-        
-        // Clear the status message on success
-        clearStatus(devicesStatus);
-    } catch (error) {
-        showStatus(devicesStatus, `Failed to load devices: ${error.message}`, true);
-    }
-}
-
-// Render Functions
-function renderDeviceTable(devices) {
-    devicesTable.innerHTML = '';
-    
-    if (!devices || devices.length === 0) {
-        const row = document.createElement('tr');
-        row.innerHTML = '<td colspan="6" class="text-center">No devices found</td>';
-        devicesTable.appendChild(row);
-        return;
-    }
-    
-    devices.forEach(device => {
-        const row = document.createElement('tr');
-        row.classList.add('device-row');
-        row.dataset.deviceId = device.deviceID;
-        
-        const connectionStatus = device.connected ? 
-            '<span class="status connected">Connected</span>' : 
-            '<span class="status disconnected">Disconnected</span>';
-            
-        const bytesIn = device.inBytesTotal ? formatBytes(device.inBytesTotal) : '-';
-        const bytesOut = device.outBytesTotal ? formatBytes(device.outBytesTotal) : '-';
-        
-        row.innerHTML = `
-            <td>${device.name || device.deviceID.substring(0, 8)}</td>
-            <td>${device.deviceID}</td>
-            <td>${device.address || '-'}</td>
-            <td>${connectionStatus}</td>
-            <td>
-                ${device.managed ? 
-                    `<button class="btn ${device.sync_enabled ? 'warning' : 'success'} toggle-sync" 
-                     data-client-id="${device.client_id}" 
-                     data-enabled="${!device.sync_enabled}">
-                     ${device.sync_enabled ? 'Disable Sync' : 'Enable Sync'}
-                     </button>
-                     <button class="btn secondary edit-client" data-client-id="${device.client_id}">Edit</button>
-                     <button class="btn danger delete-client" data-client-id="${device.client_id}">Delete</button>` 
-                    : 
-                    `<button class="btn success enable-sync" data-device-id="${device.deviceID}" data-device-name="${device.name || device.deviceID.substring(0, 8)}" data-device-address="${device.address || ''}">Enable Sync</button>`
-                }
-            </td>
-        `;
-        
-        devicesTable.appendChild(row);
-    });
-    
-    // Add event listeners for buttons
-    addDeviceActionListeners();
-}
-
-function addDeviceActionListeners() {
-    // Add device buttons
-    const addDeviceButtons = document.querySelectorAll('.enable-sync');
-    addDeviceButtons.forEach(btn => {
-        btn.addEventListener('click', async () => {
-            const deviceId = btn.dataset.deviceId;
-            const deviceName = btn.dataset.deviceName;
-            const deviceAddress = btn.dataset.deviceAddress;
-            
-            enableSyncForDevice(deviceAddress, deviceId, deviceName);
-        });
-    });
-    
-    // Edit client buttons
-    const editButtons = document.querySelectorAll('.edit-client');
-    editButtons.forEach(btn => {
-        btn.addEventListener('click', () => {
-            const clientId = btn.dataset.clientId;
-            editClient(clientId);
-        });
-    });
-    
-    // Delete client buttons
-    const deleteButtons = document.querySelectorAll('.delete-client');
-    deleteButtons.forEach(btn => {
-        btn.addEventListener('click', () => {
-            const clientId = btn.dataset.clientId;
-            if (confirm('Are you sure you want to delete this client? This will not remove the device from Syncthing.')) {
-                deleteClient(clientId);
-            }
-        });
-    });
-    
-    // Enable sync buttons
-    const toggleButtons = document.querySelectorAll('.toggle-sync');
-    toggleButtons.forEach(btn => {
-        btn.addEventListener('click', async () => {
-            const clientId = btn.dataset.clientId;
-            const enabled = btn.dataset.enabled === 'true';
-            await toggleClientSync(clientId, enabled);
-        });
-    });
-}
-
-// Helper function to format bytes
-function formatBytes(bytes, decimals = 2) {
-    if (bytes === 0) return '0 Bytes';
-    
-    const k = 1024;
-    const dm = decimals < 0 ? 0 : decimals;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
-    
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
-}
-
-// API Interaction Functions
-async function toggleClientSync(clientId, enabled) {
-    try {
-        await fetchJSON(`/api/clients/${clientId}`, {
-            method: 'PUT',
-            body: JSON.stringify({ sync_enabled: enabled })
-        });
-        
-        showStatus(devicesStatus, `Client sync ${enabled ? 'enabled' : 'disabled'}`);
-        loadAllDevices();
-    } catch (error) {
-        // Revert the checkbox state on failure
-        loadAllDevices();
-        showStatus(devicesStatus, `Failed to update sync status: ${error.message}`, true);
-    }
-}
-
-async function deleteClient(clientId) {
-    try {
-        await fetchJSON(`/api/clients/${clientId}`, {
-            method: 'DELETE'
-        });
-        
-        showStatus(devicesStatus, 'Client deleted successfully');
-        loadAllDevices();
-    } catch (error) {
-        showStatus(devicesStatus, `Failed to delete client: ${error.message}`, true);
-    }
-}
-
-async function testConnection(address, apiKey, statusElement) {
-    try {
-        console.log(`Testing connection to ${address} with API key`);
-        const result = await fetchJSON('/api/test-connection', {
-            method: 'POST',
-            body: JSON.stringify({ address, api_key: apiKey })
-        });
-        
-        console.log("Test connection result:", result);
-        
-        if (result.connected) {
-            showStatus(statusElement, `Connection successful! Syncthing version: ${result.version}, Device ID: ${result.device_id}`);
-            return true;
-        } else {
-            throw new Error(result.error || 'Connection failed');
-        }
-    } catch (error) {
-        console.error("Test connection error:", error);
-        showStatus(statusElement, `Connection test error: ${error.message}`, true);
-        return false;
-    }
-}
-
-// Client form submission
-saveClientBtn.addEventListener('click', async () => {
-    try {
-        const form = document.getElementById('client-form');
-        const formData = new FormData(form);
-        const data = Object.fromEntries(formData.entries());
-        
-        // Convert sync_enabled to boolean
-        data.sync_enabled = formData.has('sync_enabled');
-        
-        const endpoint = data.id ? `/api/clients/${data.id}` : '/api/clients';
-        const method = data.id ? 'PUT' : 'POST';
-        
-        const response = await fetch(endpoint, {
-            method: method,
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(data)
-        });
-        
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.error || 'Failed to save client');
-        }
-        
-        closeModal(clientModal);
-        resetClientForm();
-        loadAllDevices();
-    } catch (error) {
-        showStatus(devicesStatus, error.message, true);
-    }
-});
-
-// Test client connection
-document.getElementById('test-client-connection').addEventListener('click', async () => {
-    try {
-        const address = document.getElementById('client-address').value;
-        const apiKey = document.getElementById('client-api-key').value;
-        
-        if (!address || !apiKey) {
-            showStatus(devicesStatus, 'Address and API Key are required', true);
-            return;
-        }
-        
-        showStatus(devicesStatus, 'Testing connection...');
-        
-        const response = await fetch('/api/test-connection', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ address, api_key: apiKey })
-        });
-        
-        const data = await response.json();
-        
-        if (data.connected) {
-            showStatus(devicesStatus, 'Connection successful!');
-        } else {
-            throw new Error(data.error || 'Connection failed');
-        }
-    } catch (error) {
-        showStatus(devicesStatus, error.message, true);
-    }
-});
-
-// Edit client
-function editClient(clientId) {
-    fetch(`/api/clients/${clientId}`)
-        .then(response => {
-            if (!response.ok) {
-                throw new Error('Failed to load client data');
-            }
-            return response.json();
-        })
-        .then(data => {
-            currentEditingClientId = clientId;
-            document.getElementById('client-id').value = clientId;
-            document.getElementById('client-label').value = data.label;
-            document.getElementById('client-device-id').value = data.device_id;
-            document.getElementById('client-address').value = data.address;
-            document.getElementById('client-api-key').value = data.api_key;
-            document.getElementById('client-sync-enabled').checked = data.sync_enabled;
-            
-            clientModalTitle.textContent = 'Edit Client';
-            openModal(clientModal);
-        })
-        .catch(error => {
-            showStatus(devicesStatus, error.message, true);
-        });
-}
-
-// Handle enable sync button click
-async function enableSyncForDevice(deviceAddress, deviceId, deviceName) {
-    try {
-        showStatus(devicesStatus, 'Setting up sync for device...');
-        
-        console.log('Initial deviceAddress:', deviceAddress);
-        console.log('Device ID:', deviceId);
-        console.log('Device Name:', deviceName);
-        
-        // Fetch all connections to get possible addresses for this device
-        const connectionsResponse = await fetch('/api/connections');
-        const connectionsData = await connectionsResponse.json();
-        
-        if (!connectionsData.success) {
-            throw new Error(connectionsData.error || 'Failed to get connections');
-        }
-        
-        // Find all possible addresses for this device
-        const addresses = [];
-        const defaultPort = '8384'; // Default Syncthing GUI port
-        let formattedAddress = `http://:${defaultPort}`; // Default fallback - use HTTP not HTTPS
-        
-        // Try to find the device in connections
-        if (connectionsData.connections && deviceId in connectionsData.connections) {
-            const connection = connectionsData.connections[deviceId];
-            
-            // Add connected address if available
-            if (connection.address && connection.address.trim() !== '') {
-                // Extract just the IP/domain part if there's a port
-                let addressPart = connection.address;
-                let portPart = defaultPort;
-                
-                if (connection.address.includes(':')) {
-                    [addressPart, portPart] = connection.address.split(':');
-                }
-                
-                // If addressPart is empty, just use the port
-                const displayAddress = addressPart || "";
-                const value = addressPart ? `http://${addressPart}:${defaultPort}` : `http://:${defaultPort}`;
-                
-                addresses.push({
-                    display: displayAddress,
-                    value: value
-                });
-                
-                formattedAddress = value;
-            }
-            
-            // Add other addresses if available (from Address list in Syncthing)
-            if (connection.addresses && Array.isArray(connection.addresses)) {
-                connection.addresses.forEach(addr => {
-                    // Skip empty or duplicate addresses
-                    if (!addr || addr.trim() === '' || addresses.some(a => a.value.includes(addr))) {
-                        return;
-                    }
-                    
-                    // Extract IP/domain part
-                    let addressPart = addr;
-                    
-                    // Remove protocol if present
-                    if (addressPart.includes('://')) {
-                        addressPart = addressPart.split('://')[1];
-                    }
-                    
-                    // Split off port if present
-                    let portPart = defaultPort;
-                    if (addressPart.includes(':')) {
-                        [addressPart, portPart] = addressPart.split(':');
-                    }
-                    
-                    // If addressPart is empty, just use the port
-                    const displayAddress = addressPart || "";
-                    const value = addressPart ? `http://${addressPart}:${defaultPort}` : `http://:${defaultPort}`;
-                    
-                    addresses.push({
-                        display: displayAddress,
-                        value: value
-                    });
-                });
-            }
-        }
-        
-        // If the device address is provided directly (not empty), add it as an option
-        if (deviceAddress && deviceAddress.trim() !== '') {
-            let addressPart = deviceAddress;
-            
-            // Remove protocol if present
-            if (addressPart.includes('://')) {
-                addressPart = addressPart.split('://')[1];
-            }
-            
-            // Split off port if present
-            let portPart = defaultPort;
-            if (addressPart.includes(':')) {
-                [addressPart, portPart] = addressPart.split(':');
-            }
-            
-            // Only add if it's not already in the list
-            if (!addresses.some(a => a.display === addressPart)) {
-                addresses.push({
-                    display: addressPart,
-                    value: `http://${addressPart}:${defaultPort}`
-                });
-                
-                // If this is the only address, use it as default
-                if (addresses.length === 1) {
-                    formattedAddress = `http://${addressPart}:${defaultPort}`;
-                }
-            }
-        }
-        
-        // If we don't have any addresses, add a default one using default port
-        if (addresses.length === 0) {
-            addresses.push({
-                display: "",
-                value: `http://:${defaultPort}`
-            });
-        }
-        
-        console.log('Final addresses:', addresses);
-        console.log('Default formatted address:', formattedAddress);
-        
-        // Now use the combined modal to get both address and API key
-        const result = await promptForCombined(deviceName, addresses, formattedAddress);
-        
-        // Test the connection first
-        const testResponse = await fetch('/api/test-connection', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                address: result.address,
-                api_key: result.apiKey
-            })
-        });
-        
-        const testData = await testResponse.json();
-        
-        // Check the connected property which is how the API indicates success
-        if (!testData.connected) {
-            throw new Error(testData.error || 'Connection test failed');
-        }
-        
-        // Get a label for the client, default to device name if available
-        const clientLabel = deviceName || deviceId.substring(0, 8);
-        
-        // Now create the client record
-        const addClientResponse = await fetch('/api/clients', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                label: clientLabel,
-                device_id: deviceId,
-                address: result.address,
-                api_key: result.apiKey,
-                sync_enabled: true
-            })
-        });
-        
-        const clientData = await addClientResponse.json();
-        
-        if (!clientData.success) {
-            throw new Error(clientData.error || 'Failed to add client');
-        }
-        
-        showStatus(devicesStatus, `Device "${clientLabel}" added successfully and sync enabled`);
-        
-        // Refresh the devices list
-        loadAllDevices();
-        
-    } catch (error) {
-        showStatus(devicesStatus, `Error: ${error.message}`, true);
-    }
-}
-
-// Helper function to extract clean hostname
-function extractHostname(address) {
-    let result = address;
-    
-    // Remove protocol if present
-    if (result.includes('://')) {
-        result = result.split('://')[1];
-    }
-    
-    // Remove port if present
-    if (result.includes(':')) {
-        result = result.split(':')[0];
-    }
-    
-    return result;
-}
-
-// Event Listeners
-document.addEventListener('DOMContentLoaded', () => {
-    addGlobalStyles();
-    
-    // Load initial data
-    loadMasterConfig();
-    loadAllDevices();
-    
-    // Refresh devices button
-    if (refreshDevicesBtn) {
-        refreshDevicesBtn.addEventListener('click', loadAllDevices);
-    }
-    
-    // Database encryption form handling
-    if (encryptDbForm) {
-        encryptDbForm.addEventListener('submit', async (e) => {
-            e.preventDefault();
-            
-            if (!confirm('Are you sure you want to encrypt the database? This will create a backup of your existing database before encryption.')) {
-                return;
-            }
-            
-            const formData = new FormData(encryptDbForm);
-            
-            try {
-                const response = await fetch('/manage-encryption', {
-                    method: 'POST',
-                    body: formData
-                });
-                
-                const result = await response.json();
-                
-                if (result.success) {
-                    alert(result.message);
-                    // Reload the page to reflect the new encryption status
-                    window.location.reload();
-                } else {
-                    alert(`Error: ${result.error || 'Unknown error occurred during encryption'}`);
-                }
-            } catch (error) {
-                alert(`Error: ${error.message || 'Failed to encrypt database'}`);
-            }
-        });
-    }
-    
-    // Database reset form handling
-    if (resetDbForm) {
-        resetDbForm.addEventListener('submit', async (e) => {
-            e.preventDefault();
-            
-            if (!confirm('WARNING: This will reset your database to a new empty state. Your existing database will be backed up, but all current data will be lost. Are you absolutely sure?')) {
-                return;
-            }
-            
-            const formData = new FormData(resetDbForm);
-            
-            try {
-                const response = await fetch('/manage-encryption', {
-                    method: 'POST',
-                    body: formData
-                });
-                
-                const result = await response.json();
-                
-                if (result.success) {
-                    alert(result.message);
-                    // Reload the page to reflect the reset database
-                    window.location.reload();
-                } else {
-                    alert(`Error: ${result.error || 'Unknown error occurred during database reset'}`);
-                }
-            } catch (error) {
-                alert(`Error: ${error.message || 'Failed to reset database'}`);
-            }
-        });
-    }
-    
-    // Master form submission
-    masterForm.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        
-        const address = document.getElementById('master-address').value;
-        const apiKey = document.getElementById('master-api-key').value;
-        
-        clearStatus(masterStatus);
-        
-        try {
-            await fetchJSON('/api/master', {
-                method: 'POST',
-                body: JSON.stringify({ address, api_key: apiKey })
-            });
-            
-            showStatus(masterStatus, 'Master configuration saved');
-            loadMasterConfig();
-        } catch (error) {
-            showStatus(masterStatus, `Failed to save master configuration: ${error.message}`, true);
-        }
-    });
-    
-    // Test master connection button
-    testMasterConnectionBtn.addEventListener('click', async () => {
-        const address = document.getElementById('master-address').value;
-        let apiKey = document.getElementById('master-api-key').value;
-        const placeholder = document.getElementById('master-api-key').placeholder;
-        
-        if (!address) {
-            showStatus(masterStatus, 'Please enter address to test connection', true);
-            return;
-        }
-        
-        // Clear status before testing to ensure visibility of new status
-        clearStatus(masterStatus);
-        
-        // If API key field is empty but has a placeholder indicating it's set, fetch it from the server
-        if (!apiKey && placeholder === '[API Key Set]') {
-            try {
-                console.log("Testing with stored API key...");
-                showStatus(masterStatus, 'Testing connection with stored API key...');
-                
-                const result = await fetchJSON('/api/test-stored-connection', {
-                    method: 'POST',
-                    body: JSON.stringify({ address })
-                });
-                
-                if (result.connected) {
-                    showStatus(masterStatus, `Successfully connected to ${result.device_id || 'device'}`);
-                } else {
-                    throw new Error(result.error || 'Connection failed');
-                }
-                return;
-                
-            } catch (error) {
-                showStatus(masterStatus, `Connection test failed: ${error.message}`, true);
-                return;
-            }
-        }
-        
-        if (!apiKey) {
-            showStatus(masterStatus, 'Please enter API key to test connection', true);
-            return;
-        }
-        
-        await testConnection(address, apiKey, masterStatus);
-    });
-    
-    // Credentials form submission (now without requiring password)
-    credentialsForm.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        
-        clearStatus(syncStatus);
-        showStatus(syncStatus, 'Syncing credentials...');
-        
-        try {
-            const result = await fetchJSON('/api/sync-credentials', {
-                method: 'POST',
-                body: JSON.stringify({})  // Empty object since we don't need to pass credentials
-            });
-            
-            let resultMessage = result.message;
-            
-            // If there are detailed results, show them
-            if (result.results && result.results.length > 0) {
-                resultMessage += '<br><ul style="margin-top: 10px;">';
-                result.results.forEach(r => {
-                    resultMessage += `<li>${r.label}: ${r.success ? 'Success' : 'Failed - ' + (r.error || 'Unknown error')}</li>`;
-                });
-                resultMessage += '</ul>';
-            }
-            
-            showStatus(syncStatus, resultMessage, false, true);
-        } catch (error) {
-            showStatus(syncStatus, `Failed to sync credentials: ${error.message}`, true);
-        }
-    });
-    
-    // Discover devices button
-    discoverDevicesBtn.addEventListener('click', async () => {
-        clearStatus(devicesStatus);
-        
-        try {
-            showStatus(devicesStatus, 'Discovering devices...');
-            const result = await fetchJSON('/api/discover', {
-                method: 'POST'
-            });
-            
-            if (result.devices && result.devices.length > 0) {
-                showStatus(devicesStatus, `Discovered ${result.devices.length} devices. Refreshing device list...`);
-                // Auto-refresh the device list after discovery
-                setTimeout(loadAllDevices, 1000);
-            } else {
-                showStatus(devicesStatus, 'No new devices discovered.');
-            }
-        } catch (error) {
-            showStatus(devicesStatus, `Failed to discover devices: ${error.message}`, true);
-        }
-    });
-    
-    // Start polling for config changes
-    startConfigPolling();
-});
-
-// Function to start polling for config changes
-function startConfigPolling() {
-    // Clear any existing interval
-    if (configPollingInterval) {
-        clearInterval(configPollingInterval);
-    }
-    
-    // Start with an immediate check
-    checkForConfigChanges();
-    
-    // Then set up regular polling every 30 seconds
-    configPollingInterval = setInterval(checkForConfigChanges, 30000);
-}
-
-// Function to stop polling
-function stopConfigPolling() {
-    if (configPollingInterval) {
-        clearInterval(configPollingInterval);
-        configPollingInterval = null;
-    }
-}
-
-// Check for config changes via the API
-async function checkForConfigChanges() {
-    try {
-        // Only check if we're logged in
-        if (!isLoggedIn()) {
-            return;
-        }
-        
-        const url = latestEventId ? 
-            `/api/check-config-changes?since=${latestEventId}` : 
-            '/api/check-config-changes';
-            
-        const response = await fetch(url);
-        if (!response.ok) {
-            console.error('Failed to check for config changes');
-            return;
-        }
-        
-        const data = await response.json();
-        
-        if (!data.success) {
-            console.error('Error checking for config changes:', data.error);
-            return;
-        }
-        
-        // Update our latest event ID
-        if (data.latestEventId) {
-            latestEventId = data.latestEventId;
-        }
-        
-        // If there are changes, notify the user
-        if (data.hasConfigChanges) {
-            console.log('Configuration changes detected!');
-            notifyConfigChange();
-        }
-    } catch (error) {
-        console.error('Error polling for config changes:', error);
-    }
-}
-
-// Notify the user about config changes
-function notifyConfigChange() {
-    // Create a notification message
-    const notification = document.createElement('div');
-    notification.className = 'notification config-change-notification';
-    notification.innerHTML = `
-        <div class="notification-content">
-            <p><strong>Configuration Change Detected</strong></p>
-            <p>Syncthing configuration changes were detected. Would you like to synchronize credentials now?</p>
-            <div class="notification-actions">
-                <button class="btn primary sync-now-btn">Sync Now</button>
-                <button class="btn secondary dismiss-btn">Dismiss</button>
-            </div>
-        </div>
-    `;
-    
-    // Add to the page
-    document.body.appendChild(notification);
-    
-    // Show with animation
-    setTimeout(() => {
-        notification.classList.add('active');
-    }, 10);
-    
-    // Handle buttons
-    const syncNowBtn = notification.querySelector('.sync-now-btn');
-    const dismissBtn = notification.querySelector('.dismiss-btn');
-    
-    syncNowBtn.addEventListener('click', () => {
-        // Remove the notification
-        notification.classList.remove('active');
-        setTimeout(() => {
-            notification.remove();
-        }, 300);
-        
-        // Trigger credential sync
-        syncCredentials();
-    });
-    
-    dismissBtn.addEventListener('click', () => {
-        // Just remove the notification
-        notification.classList.remove('active');
-        setTimeout(() => {
-            notification.remove();
-        }, 300);
-    });
-}
-
-// Check if user is logged in
-function isLoggedIn() {
-    // Simple check - look for login form vs logged-in content
-    return !document.getElementById('login-form') || 
-           document.getElementById('login-form').style.display === 'none';
-}
-
-// Trigger credential synchronization
-async function syncCredentials() {
-    try {
-        showStatus(syncStatus, 'Synchronizing credentials...');
-        
-        const response = await fetch('/api/sync-credentials', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({})
-        });
-        
-        const data = await response.json();
-        
-        if (data.success) {
-            let resultMessage = `Credentials synchronized successfully. ${data.message || ''}`;
-            
-            // Format results with HTML, now with XSS protection
-            if (data.results && data.results.length > 0) {
-                resultMessage += '<br><ul style="margin-top: 10px;">';
-                data.results.forEach(r => {
-                    // Use textContent-based concatenation for safety
-                    const label = document.createTextNode(r.label).textContent;
-                    const status = r.success ? 'Success' : 'Failed - ' + document.createTextNode(r.error || 'Unknown error').textContent;
-                    resultMessage += `<li>${label}: ${status}</li>`;
-                });
-                resultMessage += '</ul>';
-            }
-            
-            showStatus(syncStatus, resultMessage, false, true);
-            
-            // Refresh device list to show updated status
-            loadAllDevices();
-        } else {
-            throw new Error(data.error || 'Failed to synchronize credentials');
-        }
-    } catch (error) {
-        showStatus(syncStatus, `Error: ${error.message}`, true);
-    }
 }
 
 // HTML sanitizer function to prevent XSS
 function sanitizeHTML(html) {
+    if (!html) return '';
+    
     // Create a temporary div element
     const tempDiv = document.createElement('div');
-    // Set the HTML content with just the text
-    tempDiv.textContent = html;
     
     // Allow only specific safe HTML tags and attributes
     const allowedTags = ['b', 'i', 'u', 'strong', 'em', 'span', 'ul', 'ol', 'li', 'p', 'br'];
@@ -1201,41 +78,765 @@ function sanitizeHTML(html) {
     return sanitizedDiv.innerHTML;
 }
 
-// Also update the CSS rules for status messages to ensure they're visible
-function addGlobalStyles() {
-    const styleElement = document.createElement('style');
-    styleElement.textContent = `
-        .status-message {
-            display: block !important;
-            margin-top: 15px;
-            padding: 10px;
-            border-radius: 4px;
+// Helper function to extract hostname
+function extractHostname(address) {
+    if (!address) return "";
+    
+    try {
+        // If the address has a protocol, try to parse it as a URL
+        if (address.includes('://')) {
+            const url = new URL(address);
+            return url.hostname || url.host;
         }
         
-        .status-message.success {
-            background-color: #d5f5e3;
-            color: #27ae60;
-            border: 1px solid #2ecc71;
-        }
+        // Otherwise, try to extract just the hostname part
+        // This handles cases like "hostname:port"
+        let hostname = address.split(':')[0];
         
-        .status-message.error {
-            background-color: #fadbd8;
-            color: #c0392b;
-            border: 1px solid #e74c3c;
-        }
+        // Remove trailing slashes
+        hostname = hostname.replace(/\/+$/, '');
         
-        .device-item {
-            cursor: pointer;
-            padding: 10px;
-            margin: 5px 0;
-            background-color: #f8f9fa;
-            border-radius: 4px;
-            transition: background-color 0.2s;
-        }
-        
-        .device-item:hover {
-            background-color: #e9ecef;
-        }
-    `;
-    document.head.appendChild(styleElement);
+        return hostname;
+    } catch (error) {
+        console.error('Error extracting hostname:', error);
+        return address; // Return original if parsing fails
+    }
 }
+
+// Helper function to format bytes
+function formatBytes(bytes, decimals = 2) {
+    if (bytes === 0) return '0 Bytes';
+    
+    const k = 1024;
+    const dm = decimals < 0 ? 0 : decimals;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'];
+    
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+}
+
+// Main application Alpine.js component
+document.addEventListener('alpine:init', () => {
+    Alpine.data('syncAuthApp', () => ({
+        // Application state
+        devices: [],
+        latestEventId: null,
+        configPollingInterval: null,
+        editingClientId: null,
+        statusMessages: {
+            master: '',
+            masterError: false,
+            sync: '',
+            syncError: false,
+            devices: '',
+            devicesError: false
+        },
+        
+        // Form models
+        masterConfig: {
+            address: '',
+            apiKey: ''
+        },
+        
+        clientForm: {
+            id: '',
+            label: '',
+            deviceId: '',
+            address: '',
+            apiKey: '',
+            syncEnabled: true
+        },
+        
+        // Modal state
+        modals: {
+            client: false,
+            combined: false
+        },
+        
+        // Combined modal state
+        combinedModal: {
+            deviceName: '',
+            address: '',
+            apiKey: '',
+            deviceId: '',
+            addressSuggestions: [],
+            onConfirm: null
+        },
+        
+        // Helper function to ensure address has the correct port (8384)
+        formatSyncthingAddress(address) {
+            if (!address) return '';
+            
+            try {
+                // If it doesn't have a protocol, add http://
+                if (!address.includes('://')) {
+                    address = `http://${address}`;
+                }
+                
+                // Parse the URL
+                const url = new URL(address);
+                
+                // Always set the port to 8384 (Syncthing GUI port)
+                url.port = '8384';
+                
+                return url.toString();
+            } catch (error) {
+                console.error('Error formatting Syncthing address:', error);
+                
+                // Fallback: basic string manipulation
+                let result = address;
+                
+                // Add protocol if missing
+                if (!result.includes('://')) {
+                    result = `http://${result}`;
+                }
+                
+                // Replace any port with 8384
+                result = result.replace(/:\d+(?!\d*\/)/, ':8384');
+                
+                return result;
+            }
+        },
+        
+        // Initialize the application
+        init() {
+            console.log('Initializing SyncAuth Alpine.js app');
+            this.loadMasterConfig();
+            this.loadAllDevices();
+            this.startConfigPolling();
+        },
+        
+        // API Functions
+        async loadMasterConfig() {
+            try {
+                console.log('Loading master config');
+                const response = await axios.get('/api/master');
+                
+                if (response.data.configured) {
+                    this.masterConfig.address = response.data.address || '';
+                    // Set placeholder for API key if it's already set
+                    if (response.data.api_key_set) {
+                        document.getElementById('master-api-key').placeholder = '[API Key Set]';
+                    }
+                    console.log('Master config loaded successfully');
+                } else {
+                    console.log('Master not configured yet');
+                }
+            } catch (error) {
+                console.error('Error loading master config:', error.response ? error.response.data : error.message);
+                this.showStatus('master', 'Failed to load master configuration', true);
+            }
+        },
+        
+        async loadAllDevices() {
+            try {
+                this.showStatus('devices', 'Loading devices...');
+                console.log('Loading all devices');
+                const response = await axios.get('/api/all-devices');
+                
+                if (response.data.success) {
+                    console.log(`Loaded ${response.data.devices.length} devices`);
+                    this.devices = response.data.devices || [];
+                    this.clearStatus('devices');
+                } else {
+                    throw new Error(response.data.error || 'Failed to load devices');
+                }
+            } catch (error) {
+                console.error('Error loading devices:', error);
+                this.showStatus('devices', `Error loading devices: ${error.response ? error.response.data.error : error.message}`, true);
+            }
+        },
+        
+        async saveMasterConfig() {
+            try {
+                this.showStatus('master', 'Saving master configuration...');
+                
+                const response = await axios.post('/api/master', {
+                    address: this.masterConfig.address,
+                    api_key: this.masterConfig.apiKey
+                });
+                
+                if (response.data.success) {
+                    this.showStatus('master', 'Master configuration saved successfully');
+                    
+                    // If API key field is not empty, clear it
+                    if (this.masterConfig.apiKey) {
+                        this.masterConfig.apiKey = '';
+                        // Set placeholder to indicate API key is set
+                        document.getElementById('master-api-key').placeholder = '[API Key Set]';
+                    }
+                    
+                    // Refresh devices list
+                    this.loadAllDevices();
+                } else {
+                    throw new Error(response.data.error || 'Failed to save master configuration');
+                }
+            } catch (error) {
+                this.showStatus('master', `Failed to save master configuration: ${error.response ? error.response.data.error : error.message}`, true);
+            }
+        },
+        
+        async testMasterConnection() {
+            try {
+                const address = this.masterConfig.address;
+                let apiKey = this.masterConfig.apiKey;
+                
+                if (!address) {
+                    this.showStatus('master', 'Please enter address to test connection', true);
+                    return;
+                }
+                
+                this.clearStatus('master');
+                this.showStatus('master', 'Testing connection...');
+                
+                // If API key field is empty but we have a stored key
+                if (!apiKey && document.getElementById('master-api-key').placeholder === '[API Key Set]') {
+                    try {
+                        const response = await axios.post('/api/test-stored-connection', { address });
+                        
+                        if (response.data.connected) {
+                            const deviceInfo = response.data.device_id ? ` (Device ID: ${response.data.device_id})` : '';
+                            const version = response.data.version ? ` - Version: ${response.data.version}` : '';
+                            
+                            this.showStatus('master', `Connection successful${deviceInfo}${version}`);
+                            return;
+                        }
+                    } catch (error) {
+                        this.showStatus('master', `Connection test failed: ${error.response ? error.response.data.error : error.message}`, true);
+                        return;
+                    }
+                }
+                
+                if (!apiKey) {
+                    this.showStatus('master', 'Please enter API key to test connection', true);
+                    return;
+                }
+                
+                const testResponse = await axios.post('/api/test-connection', {
+                    address,
+                    api_key: apiKey
+                });
+                
+                if (testResponse.data.connected) {
+                    const deviceInfo = testResponse.data.device_id ? ` (Device ID: ${testResponse.data.device_id})` : '';
+                    const version = testResponse.data.version ? ` - Version: ${testResponse.data.version}` : '';
+                    
+                    this.showStatus('master', `Connection successful${deviceInfo}${version}`);
+                } else {
+                    throw new Error(testResponse.data.error || 'Connection failed');
+                }
+            } catch (error) {
+                this.showStatus('master', `Connection test failed: ${error.response ? error.response.data.error : error.message}`, true);
+            }
+        },
+        
+        async syncCredentials() {
+            try {
+                this.showStatus('sync', 'Synchronizing credentials...');
+                
+                const response = await axios.post('/api/sync-credentials', {}, {
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                if (response.data.success) {
+                    let resultMessage = 'Credentials synchronized successfully!';
+                    
+                    // Add details about sync results if available
+                    if (response.data.results && response.data.results.length > 0) {
+                        resultMessage += '<ul>';
+                        response.data.results.forEach(r => {
+                            const status = r.success ? 'Success' : 'Failed - ' + sanitizeHTML(r.error || 'Unknown error');
+                            resultMessage += `<li>${r.label}: ${status}</li>`;
+                        });
+                        resultMessage += '</ul>';
+                    }
+                    
+                    this.showStatus('sync', resultMessage, false, true);
+                    
+                    // Refresh device list to show updated status
+                    this.loadAllDevices();
+                } else {
+                    throw new Error(response.data.error || 'Failed to synchronize credentials');
+                }
+            } catch (error) {
+                console.error('Error syncing credentials:', error);
+                this.showStatus('sync', `Error: ${error.response ? error.response.data.error : error.message}`, true);
+            }
+        },
+        
+        async discoverDevices() {
+            try {
+                this.showStatus('devices', 'Discovering devices...');
+                
+                const response = await axios.post('/api/discover');
+                
+                if (response.data.success) {
+                    const count = response.data.devices ? response.data.devices.length : response.data.count || 0;
+                    const message = `Discovered ${count} devices`;
+                    this.showStatus('devices', message);
+                    
+                    // Reload devices list
+                    this.loadAllDevices();
+                } else {
+                    throw new Error(response.data.error || 'Failed to discover devices');
+                }
+            } catch (error) {
+                this.showStatus('devices', `Failed to discover devices: ${error.response ? error.response.data.error : error.message}`, true);
+            }
+        },
+        
+        async toggleClientSync(clientId, enabled) {
+            try {
+                const response = await axios.put(`/api/clients/${clientId}`, {
+                    sync_enabled: enabled
+                });
+                
+                if (response.data.success) {
+                    // Refresh devices list
+                    this.loadAllDevices();
+                } else {
+                    throw new Error(response.data.error || 'Failed to toggle sync');
+                }
+            } catch (error) {
+                this.showStatus('devices', `Failed to toggle sync: ${error.response ? error.response.data.error : error.message}`, true);
+            }
+        },
+        
+        async deleteClient(clientId) {
+            if (!confirm('Are you sure you want to delete this client?')) {
+                return;
+            }
+            
+            try {
+                const response = await axios.delete(`/api/clients/${clientId}`);
+                
+                if (response.data.success) {
+                    // Refresh devices list
+                    this.loadAllDevices();
+                } else {
+                    throw new Error(response.data.error || 'Failed to delete client');
+                }
+            } catch (error) {
+                this.showStatus('devices', `Failed to delete client: ${error.response ? error.response.data.error : error.message}`, true);
+            }
+        },
+        
+        async editClient(clientId) {
+            try {
+                const response = await axios.get(`/api/clients/${clientId}`);
+                
+                if (response.data) {
+                    this.editingClientId = clientId;
+                    this.clientForm.id = clientId;
+                    this.clientForm.label = response.data.label;
+                    this.clientForm.deviceId = response.data.device_id;
+                    this.clientForm.address = this.formatSyncthingAddress(response.data.address);
+                    this.clientForm.apiKey = '';  // Don't populate API key for security
+                    this.clientForm.syncEnabled = response.data.sync_enabled;
+                    
+                    this.openModal('client');
+                } else {
+                    throw new Error('Failed to load client data');
+                }
+            } catch (error) {
+                this.showStatus('devices', error.message, true);
+            }
+        },
+        
+        async saveClient() {
+            try {
+                const formData = {
+                    label: this.clientForm.label,
+                    device_id: this.clientForm.deviceId,
+                    address: this.formatSyncthingAddress(this.clientForm.address),
+                    api_key: this.clientForm.apiKey,
+                    sync_enabled: this.clientForm.syncEnabled
+                };
+                
+                const endpoint = this.clientForm.id ? `/api/clients/${this.clientForm.id}` : '/api/clients';
+                const method = this.clientForm.id ? 'put' : 'post';
+                
+                const response = await axios({
+                    method,
+                    url: endpoint,
+                    data: formData
+                });
+                
+                if (response.data.success) {
+                    this.closeModal('client');
+                    this.resetClientForm();
+                    this.loadAllDevices();
+                } else {
+                    throw new Error(response.data.error || 'Failed to save client');
+                }
+            } catch (error) {
+                this.showStatus('devices', error.message, true);
+            }
+        },
+        
+        async testClientConnection() {
+            try {
+                const address = this.clientForm.address;
+                const apiKey = this.clientForm.apiKey;
+                
+                if (!address || !apiKey) {
+                    this.showStatus('devices', 'Address and API Key are required', true);
+                    return;
+                }
+                
+                this.showStatus('devices', 'Testing connection...');
+                
+                const response = await axios.post('/api/test-connection', {
+                    address: this.formatSyncthingAddress(address),
+                    api_key: apiKey
+                });
+                
+                if (response.data.connected) {
+                    this.showStatus('devices', 'Connection successful!');
+                } else {
+                    throw new Error(response.data.error || 'Connection failed');
+                }
+            } catch (error) {
+                this.showStatus('devices', error.message, true);
+            }
+        },
+        
+        async enableSyncForDevice(deviceAddress, deviceId, deviceName) {
+            // First, setup the basic modal regardless of API results
+            this.combinedModal.deviceName = deviceName || 'Unknown Device';
+            this.combinedModal.deviceId = deviceId;
+            this.combinedModal.address = '';
+            this.combinedModal.addressSuggestions = [];
+            this.combinedModal.apiKey = '';
+            
+            // Default port for Syncthing Web UI
+            const defaultPort = '8384';
+            
+            try {
+                this.showStatus('devices', 'Setting up sync for device...');
+                
+                console.log('Initial deviceAddress:', deviceAddress);
+                console.log('Device ID:', deviceId);
+                console.log('Device Name:', deviceName);
+                
+                const addresses = [];
+                let formattedAddress = '';
+                
+                if (deviceAddress) {
+                    // If we have a device address, use it as default
+                    formattedAddress = this.formatSyncthingAddress(deviceAddress);
+                    
+                    addresses.push({
+                        display: formattedAddress,
+                        value: formattedAddress
+                    });
+                }
+                
+                try {
+                    // Fetch all connections to get possible addresses for this device
+                    const connectionsResponse = await axios.get('/api/connections');
+                    const connections = connectionsResponse.data.connections;
+                    
+                    // Check connections for addresses related to this device
+                    if (connections && connections[deviceId]) {
+                        // We have connection data for this device
+                        const deviceConnections = connections[deviceId];
+                        
+                        for (const conn of deviceConnections) {
+                            if (conn.address && conn.address !== '0.0.0.0:0') {
+                                // Skip the outgoing address of the server itself
+                                if (conn.type === 'TCP (outgoing)') {
+                                    continue;
+                                }
+                                
+                                const addressPart = conn.address.split(':')[0];
+                                
+                                // Skip loopback addresses if we're not running locally
+                                if (addressPart !== '127.0.0.1' && addressPart !== 'localhost') {
+                                    const httpAddress = this.formatSyncthingAddress(`http://${addressPart}`);
+                                    const httpsAddress = this.formatSyncthingAddress(`https://${addressPart}`);
+                                    
+                                    // Add both http and https options
+                                    addresses.push({
+                                        display: `HTTP: ${addressPart}:${defaultPort}`,
+                                        value: httpAddress
+                                    });
+                                    
+                                    addresses.push({
+                                        display: `HTTPS: ${addressPart}:${defaultPort}`,
+                                        value: httpsAddress
+                                    });
+                                    
+                                    // If we don't have a default address yet, use this one
+                                    if (!formattedAddress) {
+                                        formattedAddress = httpAddress;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } catch (connectionError) {
+                    console.error('Error fetching connections:', connectionError);
+                    // Continue without connections data
+                }
+                
+                // If we don't have any addresses, add a default one using default port
+                if (addresses.length === 0) {
+                    formattedAddress = `http://:${defaultPort}`;
+                    addresses.push({
+                        display: "Default (port only)",
+                        value: formattedAddress
+                    });
+                }
+                
+                console.log('Final addresses:', addresses);
+                console.log('Default formatted address:', formattedAddress);
+                
+                // Update the modal with the addresses we found
+                this.combinedModal.address = formattedAddress;
+                this.combinedModal.addressSuggestions = addresses;
+            } catch (error) {
+                console.error('Error preparing device sync:', error);
+                // Add a default address suggestion even if everything fails
+                this.combinedModal.address = `http://:${defaultPort}`;
+                this.combinedModal.addressSuggestions = [{
+                    display: "Default (port only)",
+                    value: `http://:${defaultPort}`
+                }];
+            }
+            
+            // Set up the confirm callback
+            this.combinedModal.onConfirm = async () => {
+                try {
+                    // Test the connection
+                    const testResponse = await axios.post('/api/test-connection', {
+                        address: this.combinedModal.address,
+                        api_key: this.combinedModal.apiKey
+                    });
+                    
+                    if (!testResponse.data.connected) {
+                        throw new Error(testResponse.data.error || 'Connection test failed');
+                    }
+                    
+                    // Add the new client
+                    const clientResponse = await axios.post('/api/clients', {
+                        label: deviceName || 'New Device',
+                        device_id: deviceId,
+                        address: this.combinedModal.address,
+                        api_key: this.combinedModal.apiKey,
+                        sync_enabled: true
+                    });
+                    
+                    if (!clientResponse.data.success) {
+                        throw new Error(clientResponse.data.error || 'Failed to add client');
+                    }
+                    
+                    this.showStatus('devices', 'Client added successfully');
+                    this.closeModal('combined');
+                    this.loadAllDevices();
+                } catch (error) {
+                    this.showStatus('devices', `Error: ${error.response ? error.response.data.error : error.message}`, true);
+                }
+            };
+            
+            // Always open the modal, even if there were errors
+            this.openModal('combined');
+        },
+        
+        async testCombinedConnection() {
+            try {
+                const address = this.combinedModal.address;
+                const apiKey = this.combinedModal.apiKey;
+                
+                if (!address || !apiKey) {
+                    alert('Address and API Key are required');
+                    return;
+                }
+                
+                const response = await axios.post('/api/test-connection', {
+                    address,
+                    api_key: apiKey
+                });
+                
+                if (response.data.connected) {
+                    const deviceInfo = response.data.device_id ? ` (Device ID: ${response.data.device_id})` : '';
+                    const version = response.data.version ? ` - Version: ${response.data.version}` : '';
+                    alert(`Connection successful!${deviceInfo}${version}`);
+                } else {
+                    throw new Error(response.data.error || 'Connection failed');
+                }
+            } catch (error) {
+                alert(`Connection test failed: ${error.response ? error.response.data.error : error.message}`);
+            }
+        },
+        
+        confirmCombined() {
+            if (this.combinedModal.onConfirm) {
+                this.combinedModal.onConfirm();
+            }
+        },
+        
+        // Config change polling
+        startConfigPolling() {
+            // Start polling for config changes
+            this.configPollingInterval = setInterval(() => {
+                this.checkForConfigChanges();
+            }, 10000); // Check every 10 seconds
+        },
+        
+        stopConfigPolling() {
+            if (this.configPollingInterval) {
+                clearInterval(this.configPollingInterval);
+                this.configPollingInterval = null;
+            }
+        },
+        
+        async checkForConfigChanges() {
+            try {
+                const url = this.latestEventId ? 
+                    `/api/check-config-changes?since=${this.latestEventId}` : 
+                    '/api/check-config-changes';
+                
+                const response = await axios.get(url);
+                
+                if (response.data.success) {
+                    // Check if there are changes
+                    if (response.data.hasConfigChanges) {
+                        // Update latest event ID
+                        this.latestEventId = response.data.latestEventId;
+                        
+                        // Show notification
+                        this.notifyConfigChange(response.data.changes);
+                        
+                        // Reload devices
+                        this.loadAllDevices();
+                    } else {
+                        // Just update the latest event ID
+                        this.latestEventId = response.data.latestEventId;
+                    }
+                }
+            } catch (error) {
+                console.error('Error checking for config changes:', error);
+            }
+        },
+        
+        notifyConfigChange(changes) {
+            if (!changes || changes.length === 0) return;
+            
+            // Show notification about config changes in the device section
+            let message = 'Configuration changes detected:<ul>';
+            
+            changes.forEach(change => {
+                let changeType = '';
+                
+                if (change.type === 'device') {
+                    // Device changes
+                    if (change.action === 'added') {
+                        changeType = 'Device added';
+                    } else if (change.action === 'removed') {
+                        changeType = 'Device removed';
+                    } else if (change.action === 'modified') {
+                        changeType = 'Device modified';
+                    }
+                    
+                    const deviceName = change.name || change.device_id || 'Unknown device';
+                    message += `<li>${changeType}: ${deviceName}</li>`;
+                } else if (change.type === 'folder') {
+                    // Folder changes
+                    if (change.action === 'added') {
+                        changeType = 'Folder added';
+                    } else if (change.action === 'removed') {
+                        changeType = 'Folder removed';
+                    } else if (change.action === 'modified') {
+                        changeType = 'Folder modified';
+                    }
+                    
+                    const folderName = change.label || change.id || 'Unknown folder';
+                    message += `<li>${changeType}: ${folderName}</li>`;
+                }
+            });
+            
+            message += '</ul>';
+            
+            // Show notification
+            this.showStatus('devices', sanitizeHTML(message), false, true);
+        },
+        
+        // UI Helpers
+        showStatus(type, message, isError = false, isHTML = false) {
+            // Update status messages in the state
+            this.statusMessages[type] = message;
+            this.statusMessages[`${type}Error`] = isError;
+            
+            // Also update DOM elements for backward compatibility
+            const elementId = `${type}-status`;
+            const element = document.getElementById(elementId);
+            
+            if (element) {
+                if (isHTML) {
+                    element.innerHTML = sanitizeHTML(message);
+                } else {
+                    element.textContent = message;
+                }
+                
+                element.style.display = message ? 'block' : 'none';
+                element.classList.toggle('error', isError);
+            }
+        },
+        
+        clearStatus(type) {
+            this.statusMessages[type] = '';
+            this.statusMessages[`${type}Error`] = false;
+            
+            // Also update DOM elements for backward compatibility
+            const elementId = `${type}-status`;
+            const element = document.getElementById(elementId);
+            
+            if (element) {
+                element.textContent = '';
+                element.style.display = 'none';
+                element.classList.remove('error');
+            }
+        },
+        
+        // Modal handling
+        openModal(modalName) {
+            this.modals[modalName] = true;
+            
+            // Also update the DOM for backward compatibility
+            const modalElement = document.getElementById(`${modalName}-modal`);
+            if (modalElement) {
+                modalElement.classList.add('active');
+            }
+        },
+        
+        closeModal(modalName) {
+            this.modals[modalName] = false;
+            
+            // Also update the DOM for backward compatibility
+            const modalElement = document.getElementById(`${modalName}-modal`);
+            if (modalElement) {
+                modalElement.classList.remove('active');
+            }
+            
+            if (modalName === 'client') {
+                this.resetClientForm();
+            }
+        },
+        
+        resetClientForm() {
+            this.clientForm = {
+                id: '',
+                label: '',
+                deviceId: '',
+                address: '',
+                apiKey: '',
+                syncEnabled: true
+            };
+            this.editingClientId = null;
+        }
+    }));
+});
