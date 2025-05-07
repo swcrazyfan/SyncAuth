@@ -1,3 +1,9 @@
+# Ignore all hidden files
+.*
+
+# Except Dockerfile
+!Dockerfile
+
 .git
 .gitattributes
 .gitignore

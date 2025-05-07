@@ -1,6 +1,7 @@
 import os
 from flask import Flask, request, render_template, jsonify, session, redirect, url_for, flash, current_app
 import storage
+import repository as repo
 from syncthing_api import test_connection, get_configured_devices, set_gui_password, SyncthingApiError, verify_gui_credentials, get_connections, poll_events, check_for_config_saved_events, get_gui_config
 from functools import wraps
 from flask_wtf.csrf import CSRFProtect
@@ -9,6 +10,9 @@ import sys
 import logging
 import sqlite3
 import shutil
+import datetime
+from flask_sqlalchemy import SQLAlchemy
+from models import db
 
 # Set up logging to capture everything
 logging.basicConfig(level=logging.DEBUG)
@@ -51,6 +55,14 @@ app.config.update(
     SESSION_COOKIE_SAMESITE='Lax',
 )
 
+import os
+from os import path
+app.config['SQLALCHEMY_DATABASE_URI'] = f"sqlite:///{path.join(os.environ.get('DATA_DIR','/data'), 'syncauth.db')}"
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+# Initialize SQLAlchemy
+db.init_app(app)
+
 # Initialize CSRF protection
 csrf = CSRFProtect(app)
 
@@ -59,8 +71,10 @@ csrf = CSRFProtect(app)
 def inject_db_status():
     return {'db_status': storage.get_db_status()}
 
-# Initialize database at startup
+# Initialize database and ORM tables at startup
 with app.app_context():
+    # Create tables
+    db.create_all()
     try:
         storage.init_db()
     except Exception as e:
@@ -72,7 +86,7 @@ def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         # First check if master is configured
-        master = storage.get_master_config()
+        master = repo.get_master_config()
         if not master:
             # If master is not configured, redirect to setup page
             return redirect(url_for('setup'))
@@ -88,7 +102,7 @@ def login_required(f):
 def setup():
     """Initial setup page to configure master Syncthing instance."""
     # Check if master is already configured
-    master = storage.get_master_config()
+    master = repo.get_master_config()
     if master and 'logged_in' in session:
         return redirect(url_for('index'))
         
@@ -110,7 +124,7 @@ def setup():
                 )
                 
             # If connection successful, save the configuration
-            if storage.set_master_config(address, api_key):
+            if repo.set_master_config(address, api_key):
                 return redirect(url_for('login'))
             else:
                 return render_template('setup.html', error='Database error', db_status=storage.get_db_status())
@@ -124,7 +138,7 @@ def login():
     error = None
     
     # Check if master is configured
-    master = storage.get_master_config()
+    master = repo.get_master_config()
     if not master:
         return redirect(url_for('setup'))
     
@@ -245,7 +259,7 @@ def manage_encryption():
 def master_config():
     """Get or update the master Syncthing instance configuration."""
     if request.method == 'GET':
-        config = storage.get_master_config()
+        config = repo.get_master_config()
         if not config:
             return jsonify({'configured': False})
         # Don't return the actual API key in the response for security
@@ -273,7 +287,7 @@ def master_config():
                 }), 400
             
             # If connection successful, save the configuration
-            if storage.set_master_config(address, api_key):
+            if repo.set_master_config(address, api_key):
                 return jsonify({
                     'success': True, 
                     'message': 'Master configuration saved',
@@ -289,7 +303,7 @@ def master_config():
 def clients():
     """List all clients or add a new client."""
     if request.method == 'GET':
-        return jsonify(storage.list_clients())
+        return jsonify(repo.list_clients())
     
     elif request.method == 'POST':
         data = request.json
@@ -310,7 +324,7 @@ def clients():
                 }), 400
             
             # If connection successful, add the client
-            client_id = storage.add_client(
+            client_id = repo.add_client(
                 data['label'],
                 data['device_id'],
                 data['address'],
@@ -335,7 +349,7 @@ def client(client_id):
     """Get, update, or delete a specific client."""
     # Get a specific client
     if request.method == 'GET':
-        client = storage.get_client(client_id)
+        client = repo.get_client(client_id)
         if client:
             return jsonify(client)
         return jsonify({'error': 'Client not found'}), 404
@@ -346,14 +360,14 @@ def client(client_id):
         
         # Handle simple sync_enabled toggle if that's all that was sent
         if list(data.keys()) == ['sync_enabled']:
-            result = storage.update_client(client_id, sync_enabled=data['sync_enabled'])
+            result = repo.update_client(client_id, sync_enabled=data['sync_enabled'])
             if result:
                 return jsonify({'success': True, 'message': 'Client sync status updated'})
             return jsonify({'success': False, 'error': 'Client not found'}), 404
         
         # For full updates, test the connection if address or API key changed
         if 'address' in data or 'api_key' in data:
-            client = storage.get_client(client_id)
+            client = repo.get_client(client_id)
             if not client:
                 return jsonify({'success': False, 'error': 'Client not found'}), 404
             
@@ -371,7 +385,7 @@ def client(client_id):
                 return jsonify({'success': False, 'error': str(e)}), 500
         
         # Perform the update
-        result = storage.update_client(
+        result = repo.update_client(
             client_id,
             label=data.get('label'),
             device_id=data.get('device_id'),
@@ -386,7 +400,7 @@ def client(client_id):
     
     # Delete a client
     elif request.method == 'DELETE':
-        if storage.delete_client(client_id):
+        if repo.delete_client(client_id):
             return jsonify({'success': True, 'message': 'Client deleted successfully'})
         return jsonify({'success': False, 'error': 'Client not found or delete failed'}), 404
 
@@ -394,7 +408,7 @@ def client(client_id):
 @login_required
 def discover_devices():
     """Discover devices from the master Syncthing instance."""
-    master = storage.get_master_config()
+    master = repo.get_master_config()
     if not master:
         return jsonify({'success': False, 'error': 'Master not configured'}), 400
     
@@ -422,7 +436,7 @@ def sync_credentials():
             }), 401
         
         # Get master config
-        master = storage.get_master_config()
+        master = repo.get_master_config()
         if not master:
             return jsonify({
                 'success': False, 
@@ -430,7 +444,7 @@ def sync_credentials():
             }), 400
             
         # Get all enabled clients
-        clients = storage.list_clients()
+        clients = repo.list_clients()
         enabled_clients = [c for c in clients if c['sync_enabled']]
         
         if not enabled_clients:
@@ -519,7 +533,7 @@ def test_stored_connection():
         return jsonify({'success': False, 'error': 'Address is required'}), 400
     
     # Get master configuration
-    master = storage.get_master_config()
+    master = repo.get_master_config()
     if not master:
         return jsonify({'success': False, 'error': 'Master not configured'}), 400
     
@@ -538,7 +552,7 @@ def get_connection_status():
     """Get the current connections status from the master Syncthing instance."""
     try:
         # Get the master configuration
-        master = storage.get_master_config()
+        master = repo.get_master_config()
         if not master:
             return jsonify({'success': False, 'error': 'Master configuration not found'})
             
@@ -552,7 +566,7 @@ def get_connection_status():
             print(json.dumps(connections, indent=2))
             
             # Get all clients from the database to match names
-            clients = storage.get_all_clients()
+            clients = repo.list_clients()
             device_names = {}
             
             # Create a lookup for device names from clients
@@ -608,12 +622,12 @@ def get_all_devices():
     """Get a unified list of all devices - both connected and managed."""
     try:
         # Get master configuration
-        master = storage.get_master_config()
+        master = repo.get_master_config()
         if not master:
             return jsonify({'success': False, 'error': 'Master not configured'}), 400
         
         # Get all managed clients
-        managed_clients = storage.list_clients()
+        managed_clients = repo.list_clients()
         managed_device_ids = {client['device_id']: client for client in managed_clients}
         
         # Get all connections from the master
@@ -684,7 +698,7 @@ def get_all_devices():
 def check_config_changes():
     """Check for ConfigSaved events in the Syncthing API that might indicate configuration changes."""
     try:
-        config = storage.get_master_config()
+        config = repo.get_master_config()
         if not config:
             return jsonify({'success': False, 'error': 'Master configuration not found'})
             
@@ -726,7 +740,7 @@ def change_password():
             return jsonify({'success': False, 'error': 'Both current and new password are required'}), 400
         
         # Get master config
-        master = storage.get_master_config()
+        master = repo.get_master_config()
         if not master:
             return jsonify({'success': False, 'error': 'Master configuration not found'}), 404
         
@@ -748,7 +762,8 @@ def change_password():
             # If sync to clients is requested, sync the new password to all enabled clients
             sync_results = []
             if sync_to_clients:
-                enabled_clients = storage.get_all_clients(sync_enabled=True)
+                enabled_clients = repo.list_clients()
+                enabled_clients = [c for c in enabled_clients if c['sync_enabled']]
                 
                 # Get the new password hash from the master (after we set it)
                 master_gui_config = get_gui_config(master['address'], master['api_key'])
@@ -870,160 +885,157 @@ def direct_reset():
 @app.route('/api/authenticate', methods=['POST'])
 def api_authenticate():
     """API endpoint for authenticating users for database management."""
-    if request.method == 'POST':
-        data = request.get_json()
-        username = data.get('username', '')
-        password = data.get('password', '')
-        apikey = data.get('apikey', '')
-        
-        # Get master configuration
-        master_config = storage.get_master_config()
-        if not master_config:
-            return jsonify({
-                'success': False,
-                'message': 'Master configuration not found'
-            }), 400
-        
-        authenticated = False
-        # Check if using master API key
-        if apikey:
-            if master_config and master_config.get('api_key') == apikey:
-                authenticated = True
-                session['db_authenticated'] = True
-            else:
-                return jsonify({
-                    'success': False,
-                    'message': 'Invalid API key'
-                }), 401
-        
-        # Check if using username/password
-        elif username and password:
-            try:
-                # Use the existing verification function
-                if verify_gui_credentials(master_config['address'], master_config['api_key'], username, password):
-                    authenticated = True
-                    session['db_authenticated'] = True
-                else:
-                    return jsonify({
-                        'success': False,
-                        'message': 'Invalid username or password'
-                    }), 401
-            except Exception as e:
-                flash(f'Authentication error: {str(e)}', 'error')
-                return jsonify({
-                    'success': False,
-                    'message': f'Authentication error: {str(e)}'
-                }), 500
-        else:
-            return jsonify({
-                'success': False,
-                'message': 'Please provide authentication credentials'
-            }), 400
-        
-        if authenticated:
+    data = request.json
+    print(f"Auth attempt with data: {data}")
+    
+    if 'username' in data and 'password' in data:
+        # Username/password authentication
+        username = data.get('username')
+        password = data.get('password')
+        if verify_gui_credentials(username, password):
+            session['db_authenticated'] = True
             return jsonify({
                 'success': True,
                 'message': 'Authentication successful'
             })
-    
-    return jsonify({'success': False, 'message': 'Invalid request'}), 400
-
-@app.route('/api/db_action', methods=['POST'])
-@login_required
-def api_db_action():
-    """API endpoint for performing database actions after authentication."""
-    if request.method == 'POST':
-        data = request.get_json()
-        action = data.get('action', '')
-        
-        # Only allow these actions if user is authenticated for database management
-        if not session.get('db_authenticated', False):
-            return jsonify({
-                'success': False,
-                'message': 'Authentication required for database management'
-            }), 403
-        
-        if action == 'encrypt':
-            try:
-                result = storage.encrypt_database(os.environ.get('SECRET_KEY', ''))
-                if result:
-                    return jsonify({
-                        'success': True,
-                        'message': 'Database encrypted successfully!'
-                    })
-                else:
-                    return jsonify({
-                        'success': False,
-                        'message': 'Failed to encrypt database. Check logs for details.'
-                    }), 500
-            except Exception as e:
-                app.logger.error(f"Error encrypting database: {str(e)}")
-                return jsonify({
-                    'success': False,
-                    'message': f'Error encrypting database: {str(e)}'
-                }), 500
-                
-        elif action == 'reset':
-            try:
-                result = storage.reset_encryption(os.environ.get('SECRET_KEY', ''))
-                if result:
-                    return jsonify({
-                        'success': True,
-                        'message': 'Database encryption reset successfully!'
-                    })
-                else:
-                    return jsonify({
-                        'success': False,
-                        'message': 'Failed to reset database encryption. Check logs for details.'
-                    }), 500
-            except Exception as e:
-                app.logger.error(f"Error resetting encryption: {str(e)}")
-                return jsonify({
-                    'success': False,
-                    'message': f'Error resetting encryption: {str(e)}'
-                }), 500
-                
-        elif action == 'delete_recreate':
-            try:
-                # Backup the database first
-                db_path = storage.get_db_path()
-                backup_path = f"{db_path}.bak.{int(time.time())}"
-                shutil.copy2(db_path, backup_path)
-                
-                # Remove the database file
-                os.remove(db_path)
-                
-                # Initialize a new encrypted database
-                storage.init_db()
-                
-                # Clear the authentication since we have a new DB
-                session.pop('db_authenticated', None)
-                
-                return jsonify({
-                    'success': True,
-                    'message': f'Database deleted and recreated! Your old database was backed up to {backup_path}',
-                    'redirect': url_for('setup')
-                })
-            except Exception as e:
-                app.logger.error(f"Error recreating database: {str(e)}")
-                return jsonify({
-                    'success': False,
-                    'message': f'Error recreating database: {str(e)}'
-                }), 500
         else:
             return jsonify({
                 'success': False,
-                'message': f'Unknown action: {action}'
-            }), 400
+                'message': 'Invalid username or password'
+            })
+    elif 'apikey' in data:
+        # API key authentication
+        api_key = data.get('apikey')
+        # Verify API key against stored value or admin API key
+        if api_key and api_key == os.environ.get('ADMIN_API_KEY', ''):
+            session['db_authenticated'] = True
+            return jsonify({
+                'success': True,
+                'message': 'API key authentication successful'
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'message': 'Invalid API key'
+            })
+    else:
+        return jsonify({
+            'success': False,
+            'message': 'Missing authentication details'
+        })
+
+@app.route('/api/db_action', methods=['POST'])
+def api_db_action():
+    """API endpoint for performing database actions after authentication."""
+    # Check if authenticated
+    if not session.get('db_authenticated', False):
+        return jsonify({
+            'success': False,
+            'message': 'Authentication required'
+        })
     
-    return jsonify({'success': False, 'message': 'Invalid request'}), 400
+    data = request.json
+    action = data.get('action')
+    print(f"DB Action request: {action}")
+    
+    if action == 'encrypt':
+        # Encrypt database
+        try:
+            # Get encryption key from .env file
+            secret_key = os.environ.get('SECRET_KEY')
+            if not secret_key:
+                return jsonify({
+                    'success': False,
+                    'message': 'SECRET_KEY not found in environment variables'
+                })
+            
+            # Encrypt the database
+            if storage.encrypt_database(secret_key):
+                # Clear authentication after successful operation
+                session['db_authenticated'] = False
+                return jsonify({
+                    'success': True,
+                    'message': 'Database encrypted successfully',
+                    'redirect': url_for('index')
+                })
+            else:
+                return jsonify({
+                    'success': False,
+                    'message': 'Failed to encrypt database'
+                })
+        except Exception as e:
+            return jsonify({
+                'success': False,
+                'message': f'Error encrypting database: {str(e)}'
+            })
+    
+    elif action == 'delete_recreate':
+        # Delete and recreate database
+        try:
+            if storage.delete_and_recreate_database():
+                # Clear authentication after successful operation
+                session['db_authenticated'] = False
+                return jsonify({
+                    'success': True,
+                    'message': 'Database deleted and recreated successfully',
+                    'redirect': url_for('setup')
+                })
+            else:
+                return jsonify({
+                    'success': False,
+                    'message': 'Failed to delete and recreate database'
+                })
+        except Exception as e:
+            return jsonify({
+                'success': False,
+                'message': f'Error deleting/recreating database: {str(e)}'
+            })
+    
+    else:
+        return jsonify({
+            'success': False,
+            'message': f'Unknown action: {action}'
+        })
 
 @app.route('/api/auth_status', methods=['GET'])
 def api_auth_status():
     """Check if the user is authenticated for database management."""
+    authenticated = session.get('db_authenticated', False)
+    print(f"Auth status check: {authenticated}")
     return jsonify({
-        'authenticated': session.get('db_authenticated', False)
+        'authenticated': authenticated
     })
+
+@app.route('/health', methods=['GET'])
+def health():
+    return jsonify({'status': 'ok', 'time': datetime.datetime.utcnow().isoformat() + 'Z'}), 200
+
+@app.route('/history', methods=['GET','POST'])
+@login_required
+def history():
+    """Get or add sync history events."""
+    if request.method == 'GET':
+        client_id = request.args.get('client_id', type=int)
+        events = repo.list_sync_history(client_id)
+        return jsonify(history=events)
+    else:
+        data = request.json or {}
+        new_id = repo.add_sync_history(
+            data.get('client_id'), data.get('status'), data.get('message','')
+        )
+        return jsonify(success=bool(new_id), id=new_id)
+
+@app.route('/schedule', methods=['GET','POST'])
+@login_required
+def schedule():
+    """Get or update schedule preferences."""
+    if request.method == 'GET':
+        prefs = repo.get_schedule_preferences()
+        return jsonify(schedule=prefs or {})
+    else:
+        data = request.json or {}
+        success = repo.set_schedule_preferences(**data)
+        return jsonify(success=success)
 
 if __name__ == '__main__':
     host = os.environ.get('HOST', '0.0.0.0')

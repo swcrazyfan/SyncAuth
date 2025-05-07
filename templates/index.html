@@ -5,8 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SyncAuth - Syncthing Credential Manager</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-    <!-- Alpine.js -->
-    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.13.5/dist/cdn.min.js"></script>
     <!-- Axios for API requests -->
     <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
 </head>
@@ -36,44 +34,223 @@
             <p>{{ db_status.message }}</p>
             
             {% if db_status.status == 'unencrypted' and db_status.key_provided %}
-            <div class="resolution-options" x-data="dbManagement">
-                <p><strong>Resolution Options:</strong></p>
-                <ol>
-                    <li><strong>Encrypt the database</strong> (recommended for security)</li>
-                    <li><strong>Remove the SECRET_KEY</strong> from your .env file and restart the container</li>
-                    <li><strong>Delete and create a new database</strong> (start fresh with encryption)</li>
-                </ol>
+            <div class="db-management-container" x-data="{ 
+                authenticated: false, 
+                showAuthModal: false, 
+                authMethod: 'password', 
+                username: '', 
+                password: '', 
+                apikey: '', 
+                errorMsg: '', 
+                successMsg: '',
                 
-                <!-- Authentication needed message -->
-                <template x-if="!authenticated">
-                    <div class="auth-message">
-                        <button class="btn btn-primary" @click="showAuthModal = true">
-                            <i class="fas fa-lock"></i> Authenticate to Manage Database
-                        </button>
-                    </div>
-                </template>
+                init() {
+                    console.log('DB management component initialized');
+                    // Check authentication status when component loads
+                    fetch('/api/auth_status')
+                        .then(response => response.json())
+                        .then(data => { 
+                            console.log('Auth status response:', data);
+                            this.authenticated = data.authenticated;
+                        })
+                        .catch(error => {
+                            console.error('Error checking auth status:', error);
+                        });
+                },
                 
-                <!-- Database Action Buttons (only shown when authenticated) -->
-                <template x-if="authenticated">
-                    <div class="db-action-buttons">
-                        <button class="btn btn-success" @click="performDbAction('encrypt')">
-                            <i class="fas fa-lock"></i> Encrypt Database
-                        </button>
-                        <button class="btn btn-danger" @click="if(confirm('Are you sure you want to delete and recreate your database? This will cause ALL data to be lost.')) performDbAction('delete_recreate')">
-                            <i class="fas fa-trash"></i> Delete &amp; Recreate
-                        </button>
+                toggleAuthModal() {
+                    console.log('Toggle auth modal. Before:', this.showAuthModal);
+                    this.showAuthModal = !this.showAuthModal;
+                    console.log('After toggle:', this.showAuthModal);
+                    
+                    // Create a fixed-position modal directly in DOM
+                    if (this.showAuthModal) {
+                        // Create a modal overlay
+                        let overlay = document.createElement('div');
+                        overlay.id = 'modal-overlay';
+                        overlay.style.position = 'fixed';
+                        overlay.style.top = '0';
+                        overlay.style.left = '0';
+                        overlay.style.width = '100%';
+                        overlay.style.height = '100%';
+                        overlay.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
+                        overlay.style.zIndex = '10000';
+                        
+                        // Get the auth-modal and move it to the overlay
+                        let modalContent = document.querySelector('#auth-modal .modal-content').cloneNode(true);
+                        modalContent.style.position = 'fixed';
+                        modalContent.style.top = '50%';
+                        modalContent.style.left = '50%';
+                        modalContent.style.transform = 'translate(-50%, -50%)';
+                        modalContent.style.backgroundColor = 'white';
+                        modalContent.style.padding = '20px';
+                        modalContent.style.borderRadius = '5px';
+                        modalContent.style.minWidth = '300px';
+                        modalContent.style.boxShadow = '0 0 10px rgba(0, 0, 0, 0.5)';
+                        
+                        // Add close button event
+                        let closeBtn = modalContent.querySelector('.close');
+                        if (closeBtn) {
+                            closeBtn.onclick = () => this.toggleAuthModal();
+                        }
+                        
+                        // Add the authenticate button handler
+                        let authBtn = modalContent.querySelector('.btn-primary');
+                        if (authBtn) {
+                            authBtn.onclick = () => {
+                                let username = modalContent.querySelector('input[type="text"]').value;
+                                let password = modalContent.querySelector('input[type="password"]').value;
+                                this.username = username;
+                                this.password = password;
+                                this.authenticate();
+                            };
+                        }
+                        
+                        overlay.appendChild(modalContent);
+                        document.body.appendChild(overlay);
+                        console.log('Added overlay with modal to body');
+                    } else {
+                        // Remove the overlay
+                        let overlay = document.getElementById('modal-overlay');
+                        if (overlay) {
+                            document.body.removeChild(overlay);
+                            console.log('Removed overlay');
+                        }
+                    }
+                },
+                
+                authenticate() {
+                    console.log('Authenticate called');
+                    // Reset messages
+                    this.errorMsg = '';
+                    this.successMsg = '';
+                    
+                    // Prepare auth data based on selected method
+                    let authData = {};
+                    if (this.authMethod === 'password') {
+                        if (!this.username || !this.password) {
+                            this.errorMsg = 'Please enter both username and password';
+                            return;
+                        }
+                        authData = {
+                            username: this.username,
+                            password: this.password
+                        };
+                    } else {
+                        if (!this.apikey) {
+                            this.errorMsg = 'Please enter your API key';
+                            return;
+                        }
+                        authData = {
+                            apikey: this.apikey
+                        };
+                    }
+                    
+                    // Send authentication request
+                    fetch('/api/authenticate', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify(authData)
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        console.log('Auth response:', data);
+                        if (data.success) {
+                            this.successMsg = data.message || 'Authentication successful';
+                            this.authenticated = true;
+                            // Close modal after a short delay
+                            setTimeout(() => {
+                                this.showAuthModal = false;
+                            }, 1500);
+                        } else {
+                            this.errorMsg = data.message || 'Authentication failed';
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error during authentication:', error);
+                        this.errorMsg = 'Error during authentication';
+                    });
+                },
+                
+                performDbAction(action) {
+                    console.log('Performing DB action:', action);
+                    // Send database action request
+                    fetch('/api/db_action', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ action: action })
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        console.log('DB action response:', data);
+                        if (data.success) {
+                            if (data.redirect) {
+                                // If we need to redirect, show message and then redirect
+                                alert(data.message);
+                                window.location.href = data.redirect;
+                            } else {
+                                alert(data.message);
+                                // Reload the page to reflect the changes
+                                window.location.reload();
+                            }
+                        } else {
+                            alert('Error: ' + (data.message || 'Unknown error'));
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error performing database action:', error);
+                        alert('Error performing database action. See console for details.');
+                    });
+                }
+            }">
+                <div class="alert alert-warning">
+                    <h3>Database Status: {{ db_status.status|title }}</h3>
+                    <p>{{ db_status.message }}</p>
+                    
+                    <div class="resolution-options">
+                        <p><strong>Resolution Options:</strong></p>
+                        <ol>
+                            <li><strong>Encrypt the database</strong> (recommended for security)</li>
+                            <li><strong>Remove the SECRET_KEY</strong> from your .env file and restart the container</li>
+                            <li><strong>Delete and create a new database</strong> (start fresh with encryption)</li>
+                        </ol>
+                        
+                        <!-- Authentication needed message -->
+                        <template x-if="!authenticated">
+                            <div class="auth-message">
+                                <button class="btn btn-primary" @click="toggleAuthModal" id="authButton">
+                                    <i class="fas fa-lock"></i> Authenticate to Manage Database
+                                </button>
+                            </div>
+                        </template>
+                        
+                        <!-- Database Action Buttons (only shown when authenticated) -->
+                        <template x-if="authenticated">
+                            <div class="db-action-buttons">
+                                <button class="btn btn-success" @click="performDbAction('encrypt')">
+                                    <i class="fas fa-lock"></i> Encrypt Database
+                                </button>
+                                <button class="btn btn-danger" @click="if(confirm('Are you sure you want to delete and recreate your database? This will cause ALL data to be lost.')) performDbAction('delete_recreate')">
+                                    <i class="fas fa-trash"></i> Delete &amp; Recreate
+                                </button>
+                            </div>
+                        </template>
                     </div>
-                </template>
+                </div>
                 
                 <!-- Authentication Modal -->
-                <div class="modal" :class="{'show': showAuthModal}">
+                <div id="auth-modal" class="modal" x-show="showAuthModal" x-cloak @click.self="closeModal('auth')">
                     <div class="modal-content">
                         <div class="modal-header">
                             <h3>Authentication Required</h3>
-                            <span class="close" @click="showAuthModal = false">&times;</span>
+                            <span class="close" @click="toggleAuthModal">&times;</span>
                         </div>
                         <div class="modal-body">
-                            <div x-show="errorMsg" class="alert alert-error" x-text="errorMsg"></div>
+                            <div x-show="errorMsg" class="alert alert-danger" x-text="errorMsg"></div>
                             <div x-show="successMsg" class="alert alert-success" x-text="successMsg"></div>
                             
                             <div class="auth-tabs">
@@ -108,8 +285,8 @@
                             </div>
                             
                             <div class="modal-footer">
-                                <button class="btn btn-secondary" @click="showAuthModal = false">Cancel</button>
-                                <button class="btn btn-primary" @click="authenticate()">Authenticate</button>
+                                <button class="btn btn-secondary" @click="toggleAuthModal">Cancel</button>
+                                <button class="btn btn-primary" @click="authenticate">Authenticate</button>
                             </div>
                         </div>
                     </div>
@@ -344,7 +521,7 @@
         </section>
 
         <!-- Client Modal -->
-        <div id="client-modal" class="modal" :class="{ 'active': modals.client }">
+        <div id="client-modal" class="modal" x-show="modals.client" x-cloak @click.self="closeModal('client')">
             <div class="modal-content">
                 <div class="modal-header">
                     <h3 id="client-modal-title" x-text="editingClientId ? 'Edit Client' : 'Add Client'"></h3>
@@ -381,7 +558,7 @@
         </div>
 
         <!-- Combined Modal (Address + API Key) -->
-        <div id="combined-modal" class="modal" :class="{ 'active': modals.combined }">
+        <div id="combined-modal" class="modal" x-show="modals.combined" x-cloak @click.self="closeModal('combined')">
             <div class="modal-content">
                 <div class="modal-header">
                     <h3>Configure Device: <span id="combined-device-name" x-text="combinedModal.deviceName"></span></h3>
@@ -416,7 +593,7 @@
         </div>
 
         <!-- Password Change Modal -->
-        <div id="password-modal" class="modal" :class="{ 'active': modals.password }">
+        <div id="password-modal" class="modal" x-show="modals.password" x-cloak @click.self="closeModal('password')">
             <div class="modal-content">
                 <div class="modal-header">
                     <h3>Change Syncthing GUI Password</h3>
@@ -479,275 +656,7 @@
     <!-- Font Awesome for icons -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.3.0/js/all.min.js"></script>
     <script src="{{ url_for('static', filename='script.js') }}"></script>
-
-    <style>
-        /* Add more CSS styles for the modal and auth features */
-        .modal {
-            display: none;
-            position: fixed;
-            z-index: 1000;
-            left: 0;
-            top: 0;
-            width: 100%;
-            height: 100%;
-            overflow: auto;
-            background-color: rgba(0,0,0,0.4);
-        }
-        
-        .modal.show {
-            display: block;
-        }
-        
-        .modal-content {
-            background-color: #fefefe;
-            margin: 15% auto;
-            padding: 20px;
-            border: 1px solid #888;
-            width: 80%;
-            max-width: 500px;
-            border-radius: 5px;
-            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
-        }
-        
-        .modal-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            border-bottom: 1px solid #ddd;
-            padding-bottom: 10px;
-            margin-bottom: 15px;
-        }
-        
-        .modal-header h3 {
-            margin: 0;
-        }
-        
-        .modal-footer {
-            border-top: 1px solid #ddd;
-            padding-top: 15px;
-            margin-top: 15px;
-            text-align: right;
-        }
-        
-        .close {
-            color: #aaa;
-            float: right;
-            font-size: 28px;
-            font-weight: bold;
-            cursor: pointer;
-        }
-        
-        .close:hover {
-            color: #555;
-        }
-        
-        .auth-tabs {
-            display: flex;
-            margin-bottom: 15px;
-        }
-        
-        .auth-tab {
-            background-color: #f8f9fa;
-            padding: 8px 15px;
-            border: 1px solid #ddd;
-            border-radius: 4px 4px 0 0;
-            cursor: pointer;
-            margin-right: 5px;
-        }
-        
-        .auth-tab.active {
-            background-color: #fff;
-            border-bottom-color: #fff;
-        }
-        
-        .auth-tab-content {
-            border: 1px solid #ddd;
-            padding: 15px;
-            border-radius: 0 4px 4px 4px;
-            margin-top: -1px;
-        }
-        
-        .db-action-buttons {
-            margin-top: 15px;
-            display: flex;
-            gap: 10px;
-        }
-        
-        .form-group {
-            margin-bottom: 15px;
-        }
-        
-        .form-group label {
-            display: block;
-            margin-bottom: 5px;
-        }
-        
-        .form-control {
-            width: 100%;
-            padding: 8px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-        }
-        
-        .btn-primary {
-            background-color: #0d6efd;
-            color: white;
-            border: none;
-            padding: 8px 15px;
-            border-radius: 4px;
-            cursor: pointer;
-        }
-        
-        .btn-secondary {
-            background-color: #6c757d;
-            color: white;
-        }
-        
-        .btn-success {
-            background-color: #198754;
-            color: white;
-        }
-        
-        .btn-danger {
-            background-color: #dc3545;
-            color: white;
-        }
-        
-        .alert-error, .alert-danger {
-            background-color: #f8d7da;
-            color: #721c24;
-            padding: 10px;
-            border-radius: 4px;
-            margin-bottom: 15px;
-        }
-        
-        .alert-success {
-            background-color: #d4edda;
-            color: #155724;
-            padding: 10px;
-            border-radius: 4px;
-            margin-bottom: 15px;
-        }
-    </style>
-
-    <!-- Include Alpine.js right before closing body tag -->
-    <script src="https://cdn.jsdelivr.net/npm/alpinejs@3.10.2/dist/cdn.min.js"></script>
-    
-    <script>
-        // Alpine.js methods for database management
-        document.addEventListener('alpine:init', () => {
-            Alpine.data('dbManagement', () => ({
-                authenticated: false,
-                showAuthModal: false,
-                authMethod: 'password',
-                username: '',
-                password: '',
-                apikey: '',
-                errorMsg: '',
-                successMsg: '',
-                
-                init() {
-                    // Check authentication status when component loads
-                    fetch('/api/auth_status')
-                        .then(response => response.json())
-                        .then(data => { 
-                            this.authenticated = data.authenticated;
-                        })
-                        .catch(error => {
-                            console.error('Error checking auth status:', error);
-                            this.errorMsg = 'Error checking authentication status';
-                        });
-                },
-                
-                authenticate() {
-                    // Reset messages
-                    this.errorMsg = '';
-                    this.successMsg = '';
-                    
-                    // Prepare auth data based on selected method
-                    let authData = {};
-                    if (this.authMethod === 'password') {
-                        if (!this.username || !this.password) {
-                            this.errorMsg = 'Please enter both username and password';
-                            return;
-                        }
-                        authData = {
-                            username: this.username,
-                            password: this.password
-                        };
-                    } else {
-                        if (!this.apikey) {
-                            this.errorMsg = 'Please enter your API key';
-                            return;
-                        }
-                        authData = {
-                            apikey: this.apikey
-                        };
-                    }
-                    
-                    // Send authentication request
-                    fetch('/api/authenticate', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify(authData)
-                    })
-                    .then(response => response.json())
-                    .then(data => {
-                        if (data.success) {
-                            this.successMsg = data.message || 'Authentication successful';
-                            this.authenticated = true;
-                            // Close modal after a short delay
-                            setTimeout(() => {
-                                this.showAuthModal = false;
-                            }, 1500);
-                        } else {
-                            this.errorMsg = data.message || 'Authentication failed';
-                        }
-                    })
-                    .catch(error => {
-                        console.error('Error during authentication:', error);
-                        this.errorMsg = 'Error during authentication';
-                    });
-                },
-                
-                performDbAction(action) {
-                    // Reset messages
-                    this.errorMsg = '';
-                    this.successMsg = '';
-                    
-                    // Send database action request
-                    fetch('/api/db_action', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify({ action: action })
-                    })
-                    .then(response => response.json())
-                    .then(data => {
-                        if (data.success) {
-                            if (data.redirect) {
-                                // If we need to redirect, show message and then redirect
-                                alert(data.message);
-                                window.location.href = data.redirect;
-                            } else {
-                                alert(data.message);
-                                // Reload the page to reflect the changes
-                                window.location.reload();
-                            }
-                        } else {
-                            alert('Error: ' + (data.message || 'Unknown error'));
-                        }
-                    })
-                    .catch(error => {
-                        console.error('Error performing database action:', error);
-                        alert('Error performing database action. See console for details.');
-                    });
-                }
-            }));
-        });
-    </script>
+    <!-- Alpine.js -->
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.13.5/dist/cdn.min.js"></script>
 </body>
 </html>

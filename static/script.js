@@ -1325,3 +1325,125 @@ document.addEventListener('alpine:init', () => {
         }
     }));
 });
+
+// Alpine.js methods for database management
+document.addEventListener('alpine:init', () => {
+    Alpine.data('dbManagement', () => ({
+        authenticated: false,
+        showAuthModal: false,
+        authMethod: 'password',
+        username: '',
+        password: '',
+        apikey: '',
+        errorMsg: '',
+        successMsg: '',
+        
+        init() {
+            console.log('dbManagement component initialized');
+            // Check authentication status when component loads
+            fetch('/api/auth_status')
+                .then(response => response.json())
+                .then(data => { 
+                    console.log('Auth status response:', data);
+                    this.authenticated = data.authenticated;
+                })
+                .catch(error => {
+                    console.error('Error checking auth status:', error);
+                });
+        },
+        
+        toggleAuthModal() {
+            console.log('Toggle auth modal. Current state:', this.showAuthModal);
+            this.showAuthModal = !this.showAuthModal;
+            console.log('New modal state:', this.showAuthModal);
+        },
+        
+        authenticate() {
+            console.log('Authenticate called');
+            // Reset messages
+            this.errorMsg = '';
+            this.successMsg = '';
+            
+            // Prepare auth data based on selected method
+            let authData = {};
+            if (this.authMethod === 'password') {
+                if (!this.username || !this.password) {
+                    this.errorMsg = 'Please enter both username and password';
+                    return;
+                }
+                authData = {
+                    username: this.username,
+                    password: this.password
+                };
+            } else {
+                if (!this.apikey) {
+                    this.errorMsg = 'Please enter your API key';
+                    return;
+                }
+                authData = {
+                    apikey: this.apikey
+                };
+            }
+            
+            // Send authentication request
+            fetch('/api/authenticate', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(authData)
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log('Auth response:', data);
+                if (data.success) {
+                    this.successMsg = data.message || 'Authentication successful';
+                    this.authenticated = true;
+                    // Close modal after a short delay
+                    setTimeout(() => {
+                        this.showAuthModal = false;
+                    }, 1500);
+                } else {
+                    this.errorMsg = data.message || 'Authentication failed';
+                }
+            })
+            .catch(error => {
+                console.error('Error during authentication:', error);
+                this.errorMsg = 'Error during authentication';
+            });
+        },
+        
+        performDbAction(action) {
+            console.log('Performing DB action:', action);
+            // Send database action request
+            fetch('/api/db_action', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ action: action })
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log('DB action response:', data);
+                if (data.success) {
+                    if (data.redirect) {
+                        // If we need to redirect, show message and then redirect
+                        alert(data.message);
+                        window.location.href = data.redirect;
+                    } else {
+                        alert(data.message);
+                        // Reload the page to reflect the changes
+                        window.location.reload();
+                    }
+                } else {
+                    alert('Error: ' + (data.message || 'Unknown error'));
+                }
+            })
+            .catch(error => {
+                console.error('Error performing database action:', error);
+                alert('Error performing database action. See console for details.');
+            });
+        }
+    }));
+});

@@ -131,11 +131,8 @@ def init_db():
     
     # If database doesn't exist, create it
     if not db_exists:
-        conn = get_db_connection()
-        if conn:
-            create_tables(conn)
-            conn.close()
-            update_db_status('ok', 'New database created successfully.', has_data=False, key_provided=key_provided)
+        # Database will be initialized via SQLAlchemy in app startup
+        update_db_status('ok', 'New database created successfully.', has_data=False, key_provided=key_provided)
         return
         
     # Test if we can open the database without encryption
@@ -187,110 +184,9 @@ def init_db():
     if database_state in ['encrypted_or_corrupt', 'unknown']:
         return
     
-    # Create the database and tables
-    conn = get_db_connection()
-    if not conn:
-        return
-        
-    create_tables(conn)
-    conn.close()
-    
+    # Tables are managed by SQLAlchemy in app startup
     if DB_STATUS['status'] in ['ok', 'unencrypted']:
         update_db_status(DB_STATUS['status'], 'Database initialized successfully.', has_data=True, key_provided=key_provided)
-
-def create_tables(conn):
-    """Create tables if they don't exist."""
-    conn.execute('''
-    CREATE TABLE IF NOT EXISTS master_config (
-        id INTEGER PRIMARY KEY,
-        address TEXT NOT NULL,
-        api_key TEXT NOT NULL
-    )
-    ''')
-    
-    conn.execute('''
-    CREATE TABLE IF NOT EXISTS clients (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        label TEXT NOT NULL,
-        device_id TEXT NOT NULL,
-        address TEXT NOT NULL,
-        api_key TEXT NOT NULL,
-        sync_enabled BOOLEAN DEFAULT 1
-    )
-    ''')
-    
-    conn.commit()
-
-def get_db_connection():
-    """Get a database connection based on whether encryption is enabled."""
-    # Get the path to the database file
-    db_path = get_db_path()
-    
-    # Check if the database file exists
-    db_exists = os.path.exists(db_path)
-    
-    # Check if we have a key provided
-    key = os.environ.get('SECRET_KEY', None)
-    update_db_status('checking', 'Checking database state...', has_data=db_exists, key_provided=bool(key))
-    
-    if not db_exists:
-        # Database doesn't exist, we need to create it
-        try:
-            if key and ENCRYPTION_AVAILABLE:
-                # We have a key and encryption is available, create an encrypted database
-                conn = sqlcipher.connect(db_path)
-                conn.execute(f'PRAGMA key="{key}"')
-                create_tables(conn)
-                update_db_status('ok', 'Database created and encrypted successfully.', has_data=True, key_provided=True)
-                return conn
-            else:
-                # No key or encryption is not available, create an unencrypted database
-                conn = sqlite3.connect(db_path)
-                create_tables(conn)
-                if key and not ENCRYPTION_AVAILABLE:
-                    update_db_status('unencrypted', 'Database created but not encrypted because pysqlcipher3 is not available. A SECRET_KEY was provided but cannot be used.', has_data=True, key_provided=True)
-                else:
-                    update_db_status('unencrypted', 'Database initialized successfully.', has_data=True, key_provided=bool(key))
-                return conn
-        except Exception as e:
-            print(f"Error creating database: {e}")
-            update_db_status('error', f'Error creating database: {e}', has_data=False, key_provided=bool(key))
-            return None
-    
-    # Database exists, try to connect
-    if key and ENCRYPTION_AVAILABLE:
-        # Try to open as encrypted first
-        try:
-            conn = sqlcipher.connect(db_path)
-            conn.execute(f'PRAGMA key="{key}"')
-            # Test if we can actually access it with this key
-            conn.execute('SELECT count(*) FROM sqlite_master')
-            update_db_status('ok', 'Connected to encrypted database.', has_data=True, key_provided=True)
-            return conn
-        except Exception as e:
-            print(f"Failed to open as encrypted: {e}")
-            # It's either not encrypted, or encrypted with a different key
-            pass
-    
-    # Try to open as unencrypted
-    try:
-        conn = sqlite3.connect(db_path)
-        # Test if we can access it
-        conn.execute('SELECT count(*) FROM sqlite_master')
-        if key and ENCRYPTION_AVAILABLE:
-            # We have a key and encryption is available, but the database is not encrypted
-            update_db_status('unencrypted', 'Database is not encrypted but a SECRET_KEY was provided in your environment. You have two options:\n1. Encrypt the database (recommended for security)\n2. Remove the SECRET_KEY from your .env file and restart the container', has_data=True, key_provided=True)
-        else:
-            update_db_status('unencrypted', 'Database initialized successfully.', has_data=True, key_provided=bool(key))
-        return conn
-    except Exception as e:
-        # It might be encrypted with a different key, or corrupt
-        print(f"Failed to open as unencrypted: {e}")
-        if key:
-            update_db_status('encrypted_or_corrupt', 'Database appears to be encrypted with a different key than the one provided, or it may be corrupted.', has_data=True, key_provided=True)
-        else:
-            update_db_status('needs_key', 'Database appears to be encrypted. Please provide the correct SECRET_KEY in your environment.', has_data=True, key_provided=False)
-        return None
 
 def encrypt_database(key):
     """Encrypt an unencrypted database with the given key."""
@@ -490,7 +386,7 @@ def reset_database(key=None, create_backup=True):
                 os.remove(db_path)
                 print(f"Successfully deleted database file at {db_path}")
             except Exception as e:
-                print(f"Error deleting database file: {str(e)}")
+                print(f"Error deleting database file: {e}")
                 print(traceback.format_exc())
                 return False
         else:
@@ -509,7 +405,7 @@ def reset_database(key=None, create_backup=True):
                     del os.environ['SECRET_KEY']
                     print("SECRET_KEY environment variable removed")
                 except Exception as e:
-                    print(f"Error removing SECRET_KEY environment variable: {str(e)}")
+                    print(f"Error removing SECRET_KEY environment variable: {e}")
             update_db_status('ok', 'Database reset successfully (unencrypted).', has_data=False, key_provided=False)
         
         # Initialize a new database
@@ -519,7 +415,7 @@ def reset_database(key=None, create_backup=True):
             print("New database initialized successfully")
             return True
         except Exception as e:
-            print(f"Error initializing new database: {str(e)}")
+            print(f"Error initializing new database: {e}")
             print(traceback.format_exc())
             return False
     except Exception as e:
@@ -528,189 +424,27 @@ def reset_database(key=None, create_backup=True):
         update_db_status('error', f'Failed to reset database: {str(e)}')
         return False
 
-def get_master_config():
-    """Get the master Syncthing instance configuration."""
-    conn = get_db_connection()
-    if not conn:
-        return None
-        
+def delete_and_recreate_database():
+    """Delete the current database and create a new one."""
     try:
-        cursor = conn.cursor()
-        result = cursor.execute('SELECT id, address, api_key FROM master_config WHERE id = 1').fetchone()
-        if result:
-            # Create a dictionary manually from column names and values
-            config = {
-                'id': result[0],
-                'address': result[1],
-                'api_key': result[2]
-            }
-            # Decrypt the API key
-            if config.get('api_key'):
-                config['api_key'] = decrypt_api_key(config['api_key'])
-            return config
-        else:
-            return None
-    except Exception as e:
-        print(f"Error getting master config: {e}")
-        return None
-    finally:
-        conn.close()
-
-def set_master_config(address, api_key):
-    """Set or update the master Syncthing instance configuration."""
-    conn = get_db_connection()
-    if not conn:
-        return False
+        # Get database path
+        db_path = get_db_path()
         
-    try:
-        # Encrypt the API key
-        encrypted_api_key = encrypt_api_key(api_key)
+        # Create backup
+        backup_path = f"{db_path}.bak.{int(time.time())}"
+        if os.path.exists(db_path):
+            shutil.copy2(db_path, backup_path)
+            print(f"Database backed up to {backup_path}")
+            
+            # Delete the database file
+            os.remove(db_path)
+            print(f"Database deleted: {db_path}")
         
-        # Check if a record already exists
-        existing = conn.execute('SELECT id FROM master_config WHERE id = 1').fetchone()
+        # Initialize a new database
+        init_db()
+        print("New database initialized")
         
-        if existing:
-            # Update existing record
-            conn.execute('UPDATE master_config SET address = ?, api_key = ? WHERE id = 1', 
-                        (address, encrypted_api_key))
-        else:
-            # Insert new record
-            conn.execute('INSERT INTO master_config (id, address, api_key) VALUES (1, ?, ?)', 
-                        (address, encrypted_api_key))
-        
-        conn.commit()
         return True
     except Exception as e:
-        print(f"Error setting master config: {e}")
+        print(f"Error in delete_and_recreate_database: {e}")
         return False
-    finally:
-        conn.close()
-
-def add_client(label, device_id, address, api_key, sync_enabled=1):
-    """Add a new Syncthing client to the database."""
-    conn = get_db_connection()
-    if not conn:
-        return None
-        
-    try:
-        # Encrypt the API key
-        encrypted_api_key = encrypt_api_key(api_key)
-        
-        cursor = conn.execute(
-            'INSERT INTO clients (label, device_id, address, api_key, sync_enabled) VALUES (?, ?, ?, ?, ?)',
-            (label, device_id, address, encrypted_api_key, sync_enabled)
-        )
-        conn.commit()
-        return cursor.lastrowid
-    except Exception as e:
-        print(f"Error adding client: {e}")
-        return None
-    finally:
-        conn.close()
-
-def update_client(client_id, label=None, device_id=None, address=None, api_key=None, sync_enabled=None):
-    """Update an existing Syncthing client in the database."""
-    conn = get_db_connection()
-    if not conn:
-        return False
-        
-    try:
-        # Use a safer approach with fully parameterized queries
-        update_fields = []
-        params = []
-        
-        if label is not None:
-            update_fields.append(('label', label))
-            
-        if device_id is not None:
-            update_fields.append(('device_id', device_id))
-            
-        if address is not None:
-            update_fields.append(('address', address))
-            
-        if api_key is not None:
-            # Encrypt the API key
-            update_fields.append(('api_key', encrypt_api_key(api_key)))
-            
-        if sync_enabled is not None:
-            update_fields.append(('sync_enabled', sync_enabled))
-            
-        if not update_fields:
-            return True  # Nothing to update
-            
-        # Build a fully parameterized query
-        set_clauses = [f"{field} = ?" for field, _ in update_fields]
-        query = f"UPDATE clients SET {', '.join(set_clauses)} WHERE id = ?"
-        
-        # Extract values in the same order as the fields
-        params = [value for _, value in update_fields]
-        params.append(client_id)  # Add the WHERE clause parameter
-        
-        conn.execute(query, params)
-        conn.commit()
-        return True
-    except Exception as e:
-        print(f"Error updating client: {e}")
-        return False
-    finally:
-        conn.close()
-
-def delete_client(client_id):
-    """Delete a Syncthing client from the database."""
-    conn = get_db_connection()
-    if not conn:
-        return False
-        
-    try:
-        conn.execute('DELETE FROM clients WHERE id = ?', (client_id,))
-        conn.commit()
-        return True
-    except Exception as e:
-        print(f"Error deleting client: {e}")
-        return False
-    finally:
-        conn.close()
-
-def list_clients():
-    """List all Syncthing clients in the database."""
-    conn = get_db_connection()
-    if not conn:
-        return []
-        
-    try:
-        clients = [dict(c) for c in conn.execute('SELECT * FROM clients').fetchall()]
-        # Decrypt the API keys
-        for client in clients:
-            if client.get('api_key'):
-                client['api_key'] = decrypt_api_key(client['api_key'])
-        return clients
-    except Exception as e:
-        print(f"Error listing clients: {e}")
-        return []
-    finally:
-        conn.close()
-
-def get_client(client_id):
-    """Get a specific Syncthing client by ID."""
-    conn = get_db_connection()
-    if not conn:
-        return None
-        
-    try:
-        client = conn.execute('SELECT * FROM clients WHERE id = ?', (client_id,)).fetchone()
-        if client:
-            client_dict = dict(client)
-            # Decrypt the API key
-            if client_dict.get('api_key'):
-                client_dict['api_key'] = decrypt_api_key(client_dict['api_key'])
-            return client_dict
-        return None
-    except Exception as e:
-        print(f"Error getting client: {e}")
-        return None
-    finally:
-        conn.close()
-
-def get_all_clients():
-    """Alias for list_clients() for backward compatibility."""
-    return list_clients()

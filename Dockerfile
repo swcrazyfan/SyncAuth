@@ -16,9 +16,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the application code
-COPY app.py .
-COPY storage.py .
-COPY syncthing_api.py .
+COPY app.py repository.py storage.py syncthing_api.py models.py ./
 COPY static static/
 COPY templates templates/
 

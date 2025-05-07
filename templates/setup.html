@@ -91,7 +91,7 @@
         .modal {
             display: none;
             position: fixed;
-            z-index: 1;
+            z-index: 1000;
             left: 0;
             top: 0;
             width: 100%;
@@ -99,6 +99,10 @@
             overflow: auto;
             background-color: rgb(0,0,0);
             background-color: rgba(0,0,0,0.4);
+        }
+        
+        .modal.show {
+            display: block !important;
         }
         
         .modal-content {
@@ -155,6 +159,34 @@
             margin-bottom: 20px;
             border: 1px solid #ccc;
         }
+        
+        /* Modal styles to ensure visibility */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 9999;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            overflow: auto;
+            background-color: rgba(0,0,0,0.5);
+        }
+        
+        .modal.show {
+            display: block !important;
+        }
+        
+        .modal-content {
+            background-color: #fefefe;
+            margin: 10% auto;
+            padding: 20px;
+            border: 1px solid #888;
+            width: 80%;
+            max-width: 500px;
+        }
+        
+        [x-cloak] { display: none !important; }
     </style>
 </head>
 <body>
@@ -188,145 +220,36 @@
             
             {% if db_status.status == 'unencrypted' and db_status.key_provided %}
             <!-- Replace the old static content with our dynamic Alpine.js component for DB management -->
-            <div class="resolution-options" x-data="dbManagement">
-                <p><strong>Resolution Options:</strong></p>
-                <ol>
-                    <li><strong>Encrypt the database</strong> (recommended for security)</li>
-                    <li><strong>Remove the SECRET_KEY</strong> from your .env file and restart the container</li>
-                    <li><strong>Delete and create a new database</strong> (start fresh with encryption)</li>
-                </ol>
-                
-                <!-- Authentication needed message -->
-                <template x-if="!authenticated">
-                    <div class="auth-message">
-                        <button class="btn btn-primary" @click="showAuthModal = true">
-                            <i class="fas fa-lock"></i> Authenticate to Manage Database
-                        </button>
-                    </div>
-                </template>
-                
-                <!-- Database Action Buttons (only shown when authenticated) -->
-                <template x-if="authenticated">
-                    <div class="db-action-buttons">
-                        <button class="btn btn-success" @click="performDbAction('encrypt')">
-                            <i class="fas fa-lock"></i> Encrypt Database
-                        </button>
-                        <button class="btn btn-danger" @click="if(confirm('Are you sure you want to delete and recreate your database? This will cause ALL data to be lost.')) performDbAction('delete_recreate')">
-                            <i class="fas fa-trash"></i> Delete &amp; Recreate
-                        </button>
-                    </div>
-                </template>
-                
-                <!-- Authentication Modal -->
-                <div class="modal" :class="{'show': showAuthModal}">
-                    <div class="modal-content">
-                        <div class="modal-header">
-                            <h3>Authentication Required</h3>
-                            <span class="close" @click="showAuthModal = false">&times;</span>
-                        </div>
-                        <div class="modal-body">
-                            <div x-show="errorMsg" class="alert alert-error" x-text="errorMsg"></div>
-                            <div x-show="successMsg" class="alert alert-success" x-text="successMsg"></div>
-                            
-                            <div class="auth-tabs">
-                                <button class="auth-tab" :class="{'active': authMethod === 'password'}" @click="authMethod = 'password'">
-                                    Username/Password
-                                </button>
-                                <button class="auth-tab" :class="{'active': authMethod === 'apikey'}" @click="authMethod = 'apikey'">
-                                    API Key
-                                </button>
-                            </div>
-                            
-                            <div class="auth-tab-content">
-                                <!-- Username/Password inputs -->
-                                <div x-show="authMethod === 'password'" class="auth-form">
-                                    <div class="form-group">
-                                        <label>Username:</label>
-                                        <input type="text" x-model="username" class="form-control">
-                                    </div>
-                                    <div class="form-group">
-                                        <label>Password:</label>
-                                        <input type="password" x-model="password" class="form-control">
-                                    </div>
-                                </div>
-                                
-                                <!-- API Key input -->
-                                <div x-show="authMethod === 'apikey'" class="auth-form">
-                                    <div class="form-group">
-                                        <label>API Key:</label>
-                                        <input type="password" x-model="apikey" class="form-control">
-                                    </div>
-                                </div>
-                            </div>
-                            
-                            <div class="modal-footer">
-                                <button class="btn btn-secondary" @click="showAuthModal = false">Cancel</button>
-                                <button class="btn btn-primary" @click="authenticate()">Authenticate</button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            {% endif %}
-        </div>
-        {% endif %}
-        
-        <div class="setup-instructions">
-            <p>Welcome to SyncAuth! Before you can use this tool, you need to configure your master Syncthing instance.</p>
-            <p>Enter the address (including protocol and port) and API key of your master Syncthing instance below.</p>
-            <p><strong>Note:</strong> The API key can be found in the Syncthing Web GUI under Actions → Settings → GUI → API Key.</p>
-        </div>
-        
-        <form class="setup-form" method="post" action="{{ url_for('setup') }}">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <div class="form-group">
-                <label for="address">Master Address</label>
-                <input type="text" id="address" name="address" placeholder="https://syncthing-master.local:8384" required>
-                <small>Include protocol (http:// or https://) and port number.</small>
-            </div>
-            <div class="form-group">
-                <label for="api_key">API Key</label>
-                <input type="password" id="api_key" name="api_key" placeholder="API Key from master Syncthing" required>
-            </div>
-            <div class="form-actions">
-                <button type="submit" class="btn primary" style="width: 100%;">Save Master Configuration</button>
-            </div>
-        </form>
-        
-        <div class="setup-footer">
-            <p>SyncAuth - Syncthing Credential Synchronization Tool</p>
-        </div>
-    </div>
-
-    <!-- JavaScript for database forms -->
-    <script src="https://cdn.jsdelivr.net/npm/alpinejs@3.10.2/dist/cdn.min.js"></script>
-    <script>
-        // Alpine.js methods for database management
-        document.addEventListener('alpine:init', () => {
-            Alpine.data('dbManagement', () => ({
-                authenticated: false,
-                showAuthModal: false,
-                authMethod: 'password',
-                username: '',
-                password: '',
-                apikey: '',
-                errorMsg: '',
+            <div class="db-management-container" x-data="{ 
+                authenticated: false, 
+                showAuthModal: false, 
+                authMethod: 'password', 
+                username: '', 
+                password: '', 
+                apikey: '', 
+                errorMsg: '', 
                 successMsg: '',
                 
                 init() {
+                    console.log('DB management component initialized');
                     // Check authentication status when component loads
                     fetch('/api/auth_status')
                         .then(response => response.json())
                         .then(data => { 
+                            console.log('Auth status response:', data);
                             this.authenticated = data.authenticated;
                         })
                         .catch(error => {
                             console.error('Error checking auth status:', error);
-                            this.errorMsg = 'Error checking authentication status';
                         });
                 },
                 
+                toggleAuthModal() {
+                    this.showAuthModal = !this.showAuthModal;
+                },
+                
                 authenticate() {
+                    console.log('Authenticate called');
                     // Reset messages
                     this.errorMsg = '';
                     this.successMsg = '';
@@ -362,6 +285,7 @@
                     })
                     .then(response => response.json())
                     .then(data => {
+                        console.log('Auth response:', data);
                         if (data.success) {
                             this.successMsg = data.message || 'Authentication successful';
                             this.authenticated = true;
@@ -380,10 +304,7 @@
                 },
                 
                 performDbAction(action) {
-                    // Reset messages
-                    this.errorMsg = '';
-                    this.successMsg = '';
-                    
+                    console.log('Performing DB action:', action);
                     // Send database action request
                     fetch('/api/db_action', {
                         method: 'POST',
@@ -394,6 +315,7 @@
                     })
                     .then(response => response.json())
                     .then(data => {
+                        console.log('DB action response:', data);
                         if (data.success) {
                             if (data.redirect) {
                                 // If we need to redirect, show message and then redirect
@@ -413,9 +335,126 @@
                         alert('Error performing database action. See console for details.');
                     });
                 }
-            }));
-        });
+            }">
+                <div class="resolution-options">
+                    <p><strong>Resolution Options:</strong></p>
+                    <ol>
+                        <li><strong>Encrypt the database</strong> (recommended for security)</li>
+                        <li><strong>Remove the SECRET_KEY</strong> from your .env file and restart the container</li>
+                        <li><strong>Delete and create a new database</strong> (start fresh with encryption)</li>
+                    </ol>
+                    
+                    <!-- Authentication needed message -->
+                    <template x-if="!authenticated">
+                        <div class="auth-message">
+                            <button class="btn btn-primary" @click="toggleAuthModal" id="authButton">
+                                <i class="fas fa-lock"></i> Authenticate to Manage Database
+                            </button>
+                        </div>
+                    </template>
+                    
+                    <!-- Database Action Buttons (only shown when authenticated) -->
+                    <template x-if="authenticated">
+                        <div class="db-action-buttons">
+                            <button class="btn btn-success" @click="performDbAction('encrypt')">
+                                <i class="fas fa-lock"></i> Encrypt Database
+                            </button>
+                            <button class="btn btn-danger" @click="if(confirm('Are you sure you want to delete and recreate your database? This will cause ALL data to be lost.')) performDbAction('delete_recreate')">
+                                <i class="fas fa-trash"></i> Delete &amp; Recreate
+                            </button>
+                        </div>
+                    </template>
+                </div>
+                
+                <!-- Authentication Modal -->
+                <div id="auth-modal" class="modal" x-show="showAuthModal" x-cloak>
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h3>Authentication Required</h3>
+                            <span class="close" @click="toggleAuthModal">&times;</span>
+                        </div>
+                        <div class="modal-body">
+                            <div x-show="errorMsg" class="alert alert-danger" x-text="errorMsg"></div>
+                            <div x-show="successMsg" class="alert alert-success" x-text="successMsg"></div>
+                            
+                            <div class="auth-tabs">
+                                <button class="auth-tab" :class="{'active': authMethod === 'password'}" @click="authMethod = 'password'">
+                                    Username/Password
+                                </button>
+                                <button class="auth-tab" :class="{'active': authMethod === 'apikey'}" @click="authMethod = 'apikey'">
+                                    API Key
+                                </button>
+                            </div>
+                            
+                            <div class="auth-tab-content">
+                                <!-- Username/Password inputs -->
+                                <div x-show="authMethod === 'password'" class="auth-form">
+                                    <div class="form-group">
+                                        <label>Username:</label>
+                                        <input type="text" x-model="username" class="form-control">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Password:</label>
+                                        <input type="password" x-model="password" class="form-control">
+                                    </div>
+                                </div>
+                                
+                                <!-- API Key input -->
+                                <div x-show="authMethod === 'apikey'" class="auth-form">
+                                    <div class="form-group">
+                                        <label>API Key:</label>
+                                        <input type="password" x-model="apikey" class="form-control">
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="modal-footer">
+                                <button class="btn btn-secondary" @click="toggleAuthModal">Cancel</button>
+                                <button class="btn btn-primary" @click="authenticate">Authenticate</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+        {% endif %}
         
+        <div class="setup-instructions">
+            <p>Welcome to SyncAuth! Before you can use this tool, you need to configure your master Syncthing instance.</p>
+            <p>Enter the address (including protocol and port) and API key of your master Syncthing instance below.</p>
+            <p><strong>Note:</strong> The API key can be found in the Syncthing Web GUI under Actions → Settings → GUI → API Key.</p>
+        </div>
+        
+        <form class="setup-form" method="post" action="{{ url_for('setup') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="form-group">
+                <label for="address">Master Address</label>
+                <input type="text" id="address" name="address" placeholder="https://syncthing-master.local:8384" required>
+                <small>Include protocol (http:// or https://) and port number.</small>
+            </div>
+            <div class="form-group">
+                <label for="api_key">API Key</label>
+                <input type="password" id="api_key" name="api_key" placeholder="API Key from master Syncthing" required>
+            </div>
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary" style="width: 100%;">Save Master Configuration</button>
+            </div>
+        </form>
+        
+        <div class="setup-footer">
+            <p>SyncAuth - Syncthing Credential Synchronization Tool</p>
+        </div>
+    </div>
+
+    <!-- JavaScript for database forms -->
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.13.5/dist/cdn.min.js"></script>
+    
+    <!-- Font Awesome for icons -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.3.0/js/all.min.js"></script>
+    
+    <!-- Legacy JavaScript for form handling (if needed) -->
+    <script>
         // Legacy JavaScript for form handling (if needed)
         const encryptDbForm = document.getElementById('encrypt-db-form');
         if (encryptDbForm) {
@@ -426,8 +465,5 @@
             });
         }
     </script>
-    
-    <!-- Font Awesome for icons -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.3.0/js/all.min.js"></script>
 </body>
 </html>

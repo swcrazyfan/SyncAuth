@@ -1,3 +1,5 @@
+[x-cloak] { display: none !important; }
+
 :root {
     --primary-color: #3498db;
     --primary-dark: #2980b9;
